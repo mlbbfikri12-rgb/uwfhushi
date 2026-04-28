@@ -275,7 +275,29 @@ public class RoomManagementService : IRoomManagementService
                     !a.IsAvailable))
             .OrderBy(r => r.RoomType.BasePrice)
             .ThenBy(r => r.RoomNumber)
-            .Select(r => ToRoomDto(r))
+            .Select(r => new RoomResponseDto
+            {
+                Id = r.Id,
+                RoomNumber = r.RoomNumber,
+                Status = r.Status,
+                RoomType = new RoomTypeResponseDto
+                {
+                    Id = r.RoomType.Id,
+                    Name = r.RoomType.Name,
+                    Description = r.RoomType.Description,
+                    BasePrice = r.RoomType.BasePrice,
+                    MaxAdults = r.RoomType.MaxAdults,
+                    MaxChildren = r.RoomType.MaxChildren
+                },
+                Images = r.Images
+                    .Select(i => new RoomImageResponseDto
+                    {
+                        Id = i.Id,
+                        Url = i.Url,
+                        Format = i.Format
+                    })
+                    .ToList()
+            })
             .ToListAsync();
     }
 
@@ -283,7 +305,29 @@ public class RoomManagementService : IRoomManagementService
     {
         return _db.Rooms
             .AsNoTracking()
-            .Select(r => ToRoomDto(r));
+            .Select(r => new RoomResponseDto
+            {
+                Id = r.Id,
+                RoomNumber = r.RoomNumber,
+                Status = r.Status,
+                RoomType = new RoomTypeResponseDto
+                {
+                    Id = r.RoomType.Id,
+                    Name = r.RoomType.Name,
+                    Description = r.RoomType.Description,
+                    BasePrice = r.RoomType.BasePrice,
+                    MaxAdults = r.RoomType.MaxAdults,
+                    MaxChildren = r.RoomType.MaxChildren
+                },
+                Images = r.Images
+                    .Select(i => new RoomImageResponseDto
+                    {
+                        Id = i.Id,
+                        Url = i.Url,
+                        Format = i.Format
+                    })
+                    .ToList()
+            });
     }
 
     private static RoomResponseDto ToRoomDto(Room room)
