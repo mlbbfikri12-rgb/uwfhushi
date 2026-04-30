@@ -10,7 +10,7 @@ public class Room
     public RoomType RoomType { get; set; } = null!;
 
     public string Status { get; set; } = "available";
-    // available | maintenance | unavailable
+    // available | maintenance | occupied
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

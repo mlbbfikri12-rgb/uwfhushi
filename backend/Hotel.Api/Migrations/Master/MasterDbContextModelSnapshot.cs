@@ -17,7 +17,7 @@ namespace Hotel.Api.Migrations.Master
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "8.0.5")
+                .HasAnnotation("ProductVersion", "8.0.8")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -102,6 +102,50 @@ namespace Hotel.Api.Migrations.Master
                         .IsUnique();
 
                     b.ToTable("CustomersGlobal");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.HeroBanner", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("EndsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ImageUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("LinkUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("StartsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Subtitle")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IsActive", "SortOrder");
+
+                    b.ToTable("HeroBanners");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Master.Staff", b =>

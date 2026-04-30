@@ -1,7 +1,10 @@
+using Hotel.Api.Configurations;
 using Hotel.Api.Data;
 using Hotel.Api.DTOs;
 using Hotel.Api.Entities.Tenant;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Hotel.Api.Services;
 
@@ -27,14 +30,37 @@ public class RoomManagementService : IRoomManagementService
     {
         "available",
         "maintenance",
-        "unavailable"
+        "occupied"
     };
 
     private readonly AppDbContext _db;
+    private readonly ICacheService _cache;
+    private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly CacheSettings _cacheSettings;
+    private readonly BookingValidationSettings _validationSettings;
 
     public RoomManagementService(AppDbContext db)
+        : this(
+            db,
+            new NoopCacheService(),
+            new HttpContextAccessor(),
+            Options.Create(new CacheSettings()),
+            Options.Create(new BookingValidationSettings()))
+    {
+    }
+
+    public RoomManagementService(
+        AppDbContext db,
+        ICacheService cache,
+        IHttpContextAccessor httpContextAccessor,
+        IOptions<CacheSettings> cacheSettings,
+        IOptions<BookingValidationSettings> validationSettings)
     {
         _db = db;
+        _cache = cache;
+        _httpContextAccessor = httpContextAccessor;
+        _cacheSettings = cacheSettings.Value;
+        _validationSettings = validationSettings.Value;
     }
 
     public async Task<IReadOnlyCollection<RoomTypeResponseDto>> GetRoomTypesAsync()
@@ -63,6 +89,7 @@ public class RoomManagementService : IRoomManagementService
 
         _db.RoomTypes.Add(roomType);
         await _db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
 
         return ToRoomTypeDto(roomType);
     }
@@ -82,6 +109,7 @@ public class RoomManagementService : IRoomManagementService
         roomType.MaxChildren = dto.MaxChildren;
 
         await _db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
 
         return ToRoomTypeDto(roomType);
     }
@@ -126,6 +154,7 @@ public class RoomManagementService : IRoomManagementService
 
         _db.Rooms.Add(room);
         await _db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
 
         return await GetRoomByIdAsync(room.Id)
             ?? throw new Exception("Created room could not be loaded");
@@ -156,6 +185,7 @@ public class RoomManagementService : IRoomManagementService
         room.Status = status;
 
         await _db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
 
         return await GetRoomByIdAsync(id);
     }
@@ -170,6 +200,7 @@ public class RoomManagementService : IRoomManagementService
 
         room.Status = normalizedStatus;
         await _db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
 
         return await GetRoomByIdAsync(id);
     }
@@ -194,6 +225,7 @@ public class RoomManagementService : IRoomManagementService
 
         _db.RoomImages.Add(image);
         await _db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
 
         return new RoomImageResponseDto
         {
@@ -211,6 +243,7 @@ public class RoomManagementService : IRoomManagementService
 
         _db.RoomImages.Remove(image);
         await _db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
 
         return true;
     }
@@ -239,6 +272,7 @@ public class RoomManagementService : IRoomManagementService
 
         availability.IsAvailable = dto.IsAvailable;
         await _db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
 
         return new RoomAvailabilityResponseDto
         {
@@ -253,17 +287,19 @@ public class RoomManagementService : IRoomManagementService
         var checkInDate = DateTime.SpecifyKind(dto.CheckIn.Date, DateTimeKind.Utc);
         var checkOutDate = DateTime.SpecifyKind(dto.CheckOut.Date, DateTimeKind.Utc);
 
-        if (checkOutDate <= checkInDate)
-            throw new Exception("Invalid date range");
+        ValidateAvailabilitySearch(checkInDate, checkOutDate, dto.AdultCount, dto.ChildCount);
 
-        if (dto.AdultCount < 1)
-            throw new Exception("At least one adult guest is required");
+        var branchCode = GetBranchCode();
+        var cacheKey = $"availability:{branchCode}:{checkInDate:yyyyMMdd}:{checkOutDate:yyyyMMdd}:adult:{dto.AdultCount}:child:{dto.ChildCount}";
+        var cached = await _cache.GetAsync<IReadOnlyCollection<RoomResponseDto>>(cacheKey);
+        if (cached != null)
+            return cached;
 
         var dates = Enumerable.Range(0, (checkOutDate - checkInDate).Days)
             .Select(offset => checkInDate.AddDays(offset))
             .ToList();
 
-        return await _db.Rooms
+        var rooms = await _db.Rooms
             .AsNoTracking()
             .Where(r =>
                 r.Status == "available" &&
@@ -299,6 +335,13 @@ public class RoomManagementService : IRoomManagementService
                     .ToList()
             })
             .ToListAsync();
+
+        await _cache.SetAsync(
+            cacheKey,
+            rooms,
+            TimeSpan.FromMinutes(_cacheSettings.AvailabilityTtlMinutes));
+
+        return rooms;
     }
 
     private IQueryable<RoomResponseDto> BuildRoomQuery()
@@ -381,8 +424,45 @@ public class RoomManagementService : IRoomManagementService
     {
         var normalizedStatus = status.Trim().ToLowerInvariant();
         if (!AllowedRoomStatuses.Contains(normalizedStatus))
-            throw new Exception("Room status must be available, maintenance, or unavailable");
+            throw new Exception("Room status must be available, maintenance, or occupied");
 
         return normalizedStatus;
+    }
+
+    private void ValidateAvailabilitySearch(DateTime checkInDate, DateTime checkOutDate, int adultCount, int childCount)
+    {
+        var today = DateTime.UtcNow.Date;
+        if (checkInDate < today)
+            throw new Exception("Check-in cannot be in the past");
+
+        if (checkOutDate <= checkInDate)
+            throw new Exception("Invalid date range");
+
+        if ((checkOutDate - checkInDate).Days > _validationSettings.MaxStayNights)
+            throw new Exception($"Maximum stay duration is {_validationSettings.MaxStayNights} nights");
+
+        if ((checkInDate - today).Days > _validationSettings.MaxAdvanceBookingDays)
+            throw new Exception($"Check-in cannot be more than {_validationSettings.MaxAdvanceBookingDays} days ahead");
+
+        if (adultCount < 1)
+            throw new Exception("At least one adult guest is required");
+
+        if (childCount < 0)
+            throw new Exception("Child guest count cannot be negative");
+    }
+
+    private string GetBranchCode()
+    {
+        var branchCode = _httpContextAccessor.HttpContext?.Request.Headers["X-Branch-Code"].ToString();
+        if (string.IsNullOrWhiteSpace(branchCode))
+            return "unknown";
+
+        return branchCode.Trim().ToUpperInvariant();
+    }
+
+    private Task InvalidateAvailabilityCacheAsync()
+    {
+        var branchCode = GetBranchCode();
+        return _cache.RemoveByPrefixAsync($"availability:{branchCode}:");
     }
 }

@@ -22,7 +22,10 @@ public class TenantService : ITenantService
             return Environment.GetEnvironmentVariable("TENANT_CONNECTION_STRING")
                 ?? "Host=localhost;Port=5432;Database=hotel_sby;Username=postgres;Password=postgres";
 
-        var branchCode = context?.Request.Headers["X-Branch-Code"].ToString().Trim().ToUpperInvariant();
+        var branchCode = context.Request.Headers["X-Branch-Code"]
+            .ToString()
+            .Trim()
+            .ToUpperInvariant();
 
         if (string.IsNullOrEmpty(branchCode))
             throw new TenantResolutionException("X-Branch-Code header is missing", StatusCodes.Status400BadRequest);
@@ -34,16 +37,24 @@ public class TenantService : ITenantService
         if (branch == null)
             throw new TenantResolutionException("Branch not found", StatusCodes.Status400BadRequest);
 
-        if (context?.User.Identity?.IsAuthenticated == true &&
-            !context.User.IsInRole(StaffRoles.SuperAdmin))
+        // 🔥 FIX: bedakan staff vs customer
+        var isStaff = context.User?.HasClaim("auth_type", "staff") == true;
+        var isSuperAdmin = context.User?.IsInRole(StaffRoles.SuperAdmin) == true;
+
+        // 🔥 hanya staff NON-superadmin yang dibatasi
+        if (isStaff && !isSuperAdmin)
         {
-            var allowedBranchIds = context.User.Claims
-                .Where(c => c.Type == "allowed_branch_ids")
-                .SelectMany(c => c.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var allowedBranchIds = context?.User?.Claims
+    ?.Where(c => c.Type == "allowed_branch_ids")
+    .SelectMany(c => c.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    .ToHashSet(StringComparer.OrdinalIgnoreCase)
+    ?? new HashSet<string>();
 
             if (!allowedBranchIds.Contains(branch.Id.ToString()))
-                throw new TenantResolutionException("Staff is not allowed to access this branch", StatusCodes.Status403Forbidden);
+                throw new TenantResolutionException(
+                    "Staff is not allowed to access this branch",
+                    StatusCodes.Status403Forbidden
+                );
         }
 
         return $"Host={branch.DbHost};Port={branch.DbPort};Database={branch.DbName};Username={branch.DbUser};Password={branch.DbPassword}";

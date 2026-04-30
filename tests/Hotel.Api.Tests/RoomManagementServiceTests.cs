@@ -71,7 +71,7 @@ public class RoomManagementServiceTests
 
         var ex = await Assert.ThrowsAsync<Exception>(() => service.UpdateRoomStatusAsync(room.Id, "dirty"));
 
-        Assert.Equal("Room status must be available, maintenance, or unavailable", ex.Message);
+        Assert.Equal("Room status must be available, maintenance, or occupied", ex.Message);
     }
 
     [Fact]

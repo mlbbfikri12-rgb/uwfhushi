@@ -12,6 +12,7 @@ namespace Hotel.Api.Services;
 public interface IStaffAuthService
 {
     Task<StaffAuthResponseDto> LoginAsync(string email, string password);
+    Task<StaffAuthResponseDto> GetMeAsync(Guid staffId);
 }
 
 public class StaffAuthService : IStaffAuthService
@@ -43,9 +44,8 @@ public class StaffAuthService : IStaffAuthService
         if (staff == null || !BCrypt.Net.BCrypt.Verify(password, staff.PasswordHash))
             throw new UnauthorizedAccessException("Invalid staff credentials");
 
-        var allowedBranchIds = staff.Role == StaffRoles.SuperAdmin
-            ? await _masterDb.Branches.AsNoTracking().Where(b => b.IsActive).Select(b => b.Id).ToListAsync()
-            : staff.AllowedBranchIds;
+        var allowedBranches = await GetAllowedBranchesAsync(staff.Role, staff.AllowedBranchIds);
+        var allowedBranchIds = allowedBranches.Select(b => b.Id).ToList();
 
         var token = GenerateToken(staff.Id, staff.Role, allowedBranchIds);
 
@@ -54,8 +54,56 @@ public class StaffAuthService : IStaffAuthService
             Token = token,
             StaffId = staff.Id,
             Role = staff.Role,
-            AllowedBranchIds = allowedBranchIds
+            AllowedBranchIds = allowedBranchIds,
+            AllowedBranches = allowedBranches
         };
+    }
+
+    public async Task<StaffAuthResponseDto> GetMeAsync(Guid staffId)
+    {
+        var staff = await _masterDb.Staffs
+            .AsNoTracking()
+            .Where(s => s.Id == staffId && s.IsActive)
+            .Select(s => new StaffLoginRecord(
+                s.Id,
+                s.Email,
+                s.PasswordHash,
+                s.Role,
+                s.StaffBranches.Select(sb => sb.BranchId).ToList()))
+            .FirstOrDefaultAsync();
+
+        if (staff == null)
+            throw new UnauthorizedAccessException("Staff not found");
+
+        var allowedBranches = await GetAllowedBranchesAsync(staff.Role, staff.AllowedBranchIds);
+        var allowedBranchIds = allowedBranches.Select(b => b.Id).ToList();
+
+        return new StaffAuthResponseDto
+        {
+            Token = string.Empty,
+            StaffId = staff.Id,
+            Role = staff.Role,
+            AllowedBranchIds = allowedBranchIds,
+            AllowedBranches = allowedBranches
+        };
+    }
+
+    private async Task<IReadOnlyCollection<StaffAllowedBranchDto>> GetAllowedBranchesAsync(string role, IReadOnlyCollection<Guid> branchIds)
+    {
+        var query = _masterDb.Branches.AsNoTracking().Where(b => b.IsActive);
+
+        if (role != StaffRoles.SuperAdmin)
+            query = query.Where(b => branchIds.Contains(b.Id));
+
+        return await query
+            .OrderBy(b => b.Code)
+            .Select(b => new StaffAllowedBranchDto
+            {
+                Id = b.Id,
+                Code = b.Code,
+                Name = b.Name
+            })
+            .ToListAsync();
     }
 
     private string GenerateToken(Guid staffId, string role, IReadOnlyCollection<Guid> allowedBranchIds)
@@ -67,6 +115,7 @@ public class StaffAuthService : IStaffAuthService
         var claims = new List<Claim>
         {
             new("staff_id", staffId.ToString()),
+            new("auth_type", "staff"),
             new("role", role),
             new(ClaimTypes.Role, role),
             new("allowed_branch_ids", string.Join(',', allowedBranchIds))

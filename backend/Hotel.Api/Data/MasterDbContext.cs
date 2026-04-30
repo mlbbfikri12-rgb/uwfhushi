@@ -11,6 +11,7 @@ public class MasterDbContext : DbContext
     public DbSet<CustomerGlobal> CustomersGlobal => Set<CustomerGlobal>();
     public DbSet<Staff> Staffs => Set<Staff>();
     public DbSet<StaffBranch> StaffBranches => Set<StaffBranch>();
+    public DbSet<HeroBanner> HeroBanners => Set<HeroBanner>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -31,6 +32,9 @@ public class MasterDbContext : DbContext
         modelBuilder.Entity<StaffBranch>()
             .HasIndex(sb => new { sb.StaffId, sb.BranchId })
             .IsUnique();
+
+        modelBuilder.Entity<HeroBanner>()
+            .HasIndex(b => new { b.IsActive, b.SortOrder });
 
         modelBuilder.Entity<StaffBranch>()
             .HasOne(sb => sb.Staff)
