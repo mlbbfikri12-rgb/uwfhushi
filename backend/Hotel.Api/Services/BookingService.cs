@@ -1,5 +1,6 @@
 using Hotel.Api.Configurations;
 using Hotel.Api.Data;
+using Hotel.Api.DTOs;
 using Hotel.Api.Entities.Master;
 using Hotel.Api.Entities.Tenant;
 using Microsoft.EntityFrameworkCore;
@@ -33,6 +34,10 @@ public interface IBookingService
         int child,
         string? paymentMethod,
         string? notes);
+
+    Task<CheckoutOrderResponseDto> CheckoutFromOrderAsync(
+        Guid customerGlobalId,
+        CheckoutOrderDto dto);
 }
 
 
@@ -129,7 +134,6 @@ public class BookingService : IBookingService
         string? paymentMethod,
         string? notes)
     {
-        Console.WriteLine($"Creating booking for authenticated customer. GlobalCustomerId={customerGlobalId}, RoomId={roomId}, CheckIn={checkIn}, CheckOut={checkOut}, Adult={adult}, Child={child}");
         return await CreateBookingCoreAsync(
             customerGlobalId,
             roomId,
@@ -142,6 +146,223 @@ public class BookingService : IBookingService
             child,
             paymentMethod,
             notes);
+    }
+
+    public async Task<CheckoutOrderResponseDto> CheckoutFromOrderAsync(
+        Guid customerGlobalId,
+        CheckoutOrderDto dto)
+    {
+        if (dto.AdultCount < 1)
+            throw new Exception("At least one adult guest is required");
+        if (dto.ChildCount < 0)
+            throw new Exception("Child guest count cannot be negative");
+
+        var globalCustomer = await _masterDb.CustomersGlobal
+            .FirstOrDefaultAsync(c => c.Id == customerGlobalId);
+        if (globalCustomer == null)
+            throw new Exception("Customer not found");
+
+        var customer = await _db.Customers
+            .FirstOrDefaultAsync(c => c.GlobalCustomerId == customerGlobalId);
+        if (customer == null)
+            throw new Exception("Customer not found in this branch");
+
+        var branchCode = _skipBranchValidation ? "TEST" : GetBranchCode();
+        var branchName = "Test Hotel";
+
+        if (!_skipBranchValidation)
+        {
+            var branch = await _masterDb.Branches
+                .AsNoTracking()
+                .FirstOrDefaultAsync(b => b.Code == branchCode && b.IsActive);
+            if (branch == null)
+                throw new Exception("Branch not found");
+            branchName = branch.Name;
+        }
+
+        var draft = await _db.OrderDrafts
+            .Include(o => o.Items)
+            .ThenInclude(i => i.RatePlan)
+            .Include(o => o.Items)
+            .ThenInclude(i => i.RoomType)
+            .FirstOrDefaultAsync(o => o.CustomerId == customer.Id && o.Status == "draft");
+
+        if (draft == null || draft.Items.Count == 0)
+            throw new Exception("Order draft is empty");
+
+        using var masterTransaction = await _masterDb.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+        using var tenantTransaction = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        try
+        {
+            var resultItems = new List<CheckoutBookingItemDto>();
+
+            foreach (var item in draft.Items.OrderBy(i => i.CreatedAt))
+            {
+                var checkInDate = DateTime.SpecifyKind(item.CheckIn.Date, DateTimeKind.Utc);
+                var checkOutDate = DateTime.SpecifyKind(item.CheckOut.Date, DateTimeKind.Utc);
+
+                ValidateBookingRequest(checkInDate, checkOutDate, globalCustomer.Email, dto.AdultCount, dto.ChildCount, isAuthenticated: true);
+
+                var nights = (checkOutDate - checkInDate).Days;
+                var dates = Enumerable.Range(0, nights)
+                    .Select(offset => checkInDate.AddDays(offset))
+                    .ToList();
+
+                var candidateRooms = await _db.Rooms
+                    .Where(r =>
+                        r.RoomTypeId == item.RoomTypeId &&
+                        r.Status == "available" &&
+                        dto.AdultCount <= r.RoomType.MaxAdults &&
+                        dto.ChildCount <= r.RoomType.MaxChildren)
+                    .Select(r => new { r.Id, r.RoomNumber, RoomTypeName = r.RoomType.Name })
+                    .ToListAsync();
+
+                if (candidateRooms.Count < item.TotalRooms)
+                    throw new Exception("Room not available");
+
+                var candidateRoomIds = candidateRooms.Select(r => r.Id).ToList();
+                var unavailableRoomIds = await _db.RoomAvailabilities
+                    .Where(a => candidateRoomIds.Contains(a.RoomId) && dates.Contains(a.Date) && !a.IsAvailable)
+                    .Select(a => a.RoomId)
+                    .Distinct()
+                    .ToListAsync();
+
+                var selectedRooms = candidateRooms
+                    .Where(r => !unavailableRoomIds.Contains(r.Id))
+                    .Take(item.TotalRooms)
+                    .ToList();
+
+                if (selectedRooms.Count < item.TotalRooms)
+                    throw new Exception("Room not available");
+
+                foreach (var selectedRoom in selectedRooms)
+                {
+                    var basePrice = item.PricePerNight * nights;
+                    var tax = Math.Round(basePrice * 0.11m, 2);
+                    var totalPrice = basePrice + tax;
+
+                    var booking = new Booking
+                    {
+                        Id = Guid.NewGuid(),
+                        RoomId = selectedRoom.Id,
+                        CustomerId = customer.Id,
+                        CheckIn = checkInDate,
+                        CheckOut = checkOutDate,
+                        AdultCount = dto.AdultCount,
+                        ChildCount = dto.ChildCount,
+                        BasePrice = basePrice,
+                        Tax = tax,
+                        TotalPrice = totalPrice,
+                        BookingCode = await GenerateBookingCodeAsync(),
+                        Status = "pending",
+                        PaymentMethod = dto.PaymentMethod ?? item.RatePlan?.PaymentType,
+                        PaymentStatus = "pending",
+                        Notes = dto.Notes,
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    _db.Bookings.Add(booking);
+
+                    var existingAvailabilities = await _db.RoomAvailabilities
+                        .Where(a => a.RoomId == selectedRoom.Id && dates.Contains(a.Date))
+                        .ToDictionaryAsync(a => a.Date);
+
+                    foreach (var date in dates)
+                    {
+                        if (existingAvailabilities.TryGetValue(date, out var availability))
+                        {
+                            availability.IsAvailable = false;
+                        }
+                        else
+                        {
+                            _db.RoomAvailabilities.Add(new RoomAvailability
+                            {
+                                Id = Guid.NewGuid(),
+                                RoomId = selectedRoom.Id,
+                                Date = date,
+                                IsAvailable = false,
+                                CreatedAt = DateTime.UtcNow
+                            });
+                        }
+                    }
+
+                    resultItems.Add(new CheckoutBookingItemDto
+                    {
+                        BookingId = booking.Id,
+                        BookingCode = booking.BookingCode,
+                        RoomId = selectedRoom.Id,
+                        RoomNumber = selectedRoom.RoomNumber,
+                        RoomTypeName = selectedRoom.RoomTypeName,
+                        RatePlanName = item.RatePlan?.Name ?? string.Empty,
+                        CheckIn = checkInDate,
+                        CheckOut = checkOutDate,
+                        TotalPrice = totalPrice
+                    });
+                }
+            }
+
+            draft.Status = "checked_out";
+            draft.UpdatedAt = DateTime.UtcNow;
+
+            await _db.SaveChangesAsync();
+            await tenantTransaction.CommitAsync();
+            await masterTransaction.CommitAsync();
+            await InvalidateBookingRelatedCachesAsync(branchCode);
+
+            var bookingIds = resultItems.Select(i => i.BookingId).ToList();
+            var loadedBookings = await _db.Bookings
+                .AsNoTracking()
+                .Include(b => b.Customer)
+                .Include(b => b.Room)
+                .ThenInclude(r => r.RoomType)
+                .Where(b => bookingIds.Contains(b.Id))
+                .ToListAsync();
+
+            foreach (var loadedBooking in loadedBookings)
+            {
+                try
+                {
+                    await _bookingEmailService.SendBookingCreatedAsync(loadedBooking, branchName);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Booking email failed after checkout from order. BookingId={BookingId}", loadedBooking.Id);
+                }
+            }
+
+            return new CheckoutOrderResponseDto
+            {
+                Message = "Order checkout success",
+                OrderDraftId = draft.Id,
+                GrandTotal = resultItems.Sum(x => x.TotalPrice),
+                Bookings = resultItems
+            };
+        }
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            await tenantTransaction.RollbackAsync();
+            await masterTransaction.RollbackAsync();
+            throw new Exception("Room not available");
+        }
+        catch (Exception ex) when (IsSerializationFailure(ex))
+        {
+            await tenantTransaction.RollbackAsync();
+            await masterTransaction.RollbackAsync();
+            throw new Exception("Room not available, please try another date");
+        }
+        catch (InvalidOperationException ex) when (IsTransientFailure(ex))
+        {
+            await tenantTransaction.RollbackAsync();
+            await masterTransaction.RollbackAsync();
+            throw new Exception("Room not available, please try another date");
+        }
+        catch
+        {
+            await tenantTransaction.RollbackAsync();
+            await masterTransaction.RollbackAsync();
+            throw;
+        }
     }
 
     private async Task<Booking> CreateBookingCoreAsync(
@@ -263,7 +484,7 @@ public class BookingService : IBookingService
                 .AnyAsync();
 
             if (unavailable)
-                throw new Exception("Room not available for the selected dates");
+                throw new Exception("Room not available");
 
             var room = await _db.Rooms
                 .Include(r => r.RoomType)
@@ -450,7 +671,7 @@ public class BookingService : IBookingService
             throw new Exception($"Check-in cannot be more than {_validationSettings.MaxAdvanceBookingDays} days ahead");
 
         if (!isAuthenticated && string.IsNullOrWhiteSpace(customerEmail))
-            throw new Exception("Customer Email is required");
+            throw new Exception("Customer email is required");
 
         if (adult < 1)
             throw new Exception("At least one adult guest is required");

@@ -99,7 +99,7 @@ export default function RoomsPage() {
 
         {/* TABLE */}
         <RoomTable
-          rooms={(roomsQuery.data ?? []) as any}
+          rooms={roomsQuery.data ?? []}
           isLoading={roomsQuery.isLoading}
         />
       </div>

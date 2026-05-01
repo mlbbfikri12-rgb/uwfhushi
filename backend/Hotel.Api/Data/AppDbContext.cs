@@ -11,6 +11,10 @@ public class AppDbContext : DbContext
     public DbSet<Room> Rooms => Set<Room>();
     public DbSet<RoomImage> RoomImages => Set<RoomImage>();
     public DbSet<RoomAvailability> RoomAvailabilities => Set<RoomAvailability>();
+    public DbSet<RoomTypeFacility> RoomTypeFacilities => Set<RoomTypeFacility>();
+    public DbSet<RatePlan> RatePlans => Set<RatePlan>();
+    public DbSet<OrderDraft> OrderDrafts => Set<OrderDraft>();
+    public DbSet<OrderItem> OrderItems => Set<OrderItem>();
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<Booking> Bookings => Set<Booking>();
     public DbSet<Payment> Payments => Set<Payment>();
@@ -54,6 +58,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Room>()
             .HasIndex(r => r.RoomTypeId);
 
+        modelBuilder.Entity<RatePlan>()
+            .HasIndex(rp => new { rp.RoomTypeId, rp.IsActive });
+
         // ======================
         // ROOM AVAILABILITY
         // ======================
@@ -66,6 +73,12 @@ public class AppDbContext : DbContext
         // ======================
         modelBuilder.Entity<Payment>()
             .HasIndex(p => p.BookingId);
+
+        modelBuilder.Entity<OrderDraft>()
+            .HasIndex(o => new { o.CustomerId, o.Status });
+
+        modelBuilder.Entity<OrderItem>()
+            .HasIndex(i => new { i.OrderDraftId, i.RoomTypeId, i.RatePlanId });
 
         // ======================
         // RELATIONSHIPS (WAJIB)
@@ -88,6 +101,36 @@ public class AppDbContext : DbContext
             .HasOne(b => b.Customer)
             .WithMany(c => c.Bookings)
             .HasForeignKey(b => b.CustomerId);
+
+        modelBuilder.Entity<RoomTypeFacility>()
+            .HasOne(rtf => rtf.RoomType)
+            .WithMany(rt => rt.Facilities)
+            .HasForeignKey(rtf => rtf.RoomTypeId);
+
+        modelBuilder.Entity<RatePlan>()
+            .HasOne(rp => rp.RoomType)
+            .WithMany(rt => rt.RatePlans)
+            .HasForeignKey(rp => rp.RoomTypeId);
+
+        modelBuilder.Entity<OrderDraft>()
+            .HasOne(o => o.Customer)
+            .WithMany()
+            .HasForeignKey(o => o.CustomerId);
+
+        modelBuilder.Entity<OrderItem>()
+            .HasOne(i => i.OrderDraft)
+            .WithMany(o => o.Items)
+            .HasForeignKey(i => i.OrderDraftId);
+
+        modelBuilder.Entity<OrderItem>()
+            .HasOne(i => i.RoomType)
+            .WithMany()
+            .HasForeignKey(i => i.RoomTypeId);
+
+        modelBuilder.Entity<OrderItem>()
+            .HasOne(i => i.RatePlan)
+            .WithMany()
+            .HasForeignKey(i => i.RatePlanId);
     }
 
 

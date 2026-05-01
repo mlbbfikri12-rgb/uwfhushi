@@ -17,3 +17,27 @@ export type BookingResponse = {
   bookingCode: string;
   totalPrice: number;
 };
+
+export type CheckoutOrderPayload = {
+  adultCount: number;
+  childCount: number;
+  paymentMethod?: string;
+  notes?: string;
+};
+
+export type CheckoutOrderResponse = {
+  message: string;
+  orderDraftId: string;
+  grandTotal: number;
+  bookings: {
+    bookingId: string;
+    bookingCode: string;
+    roomId: string;
+    roomNumber: string;
+    roomTypeName: string;
+    ratePlanName: string;
+    checkIn: string;
+    checkOut: string;
+    totalPrice: number;
+  }[];
+};

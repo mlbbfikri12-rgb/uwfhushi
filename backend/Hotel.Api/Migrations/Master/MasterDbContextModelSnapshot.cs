@@ -69,6 +69,54 @@ namespace Hotel.Api.Migrations.Master
                     b.ToTable("Branches");
                 });
 
+            modelBuilder.Entity("Hotel.Api.Entities.Master.Brand", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("LogoUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("Brands");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.City", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Province")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name");
+
+                    b.ToTable("Cities");
+                });
+
             modelBuilder.Entity("Hotel.Api.Entities.Master.CustomerGlobal", b =>
                 {
                     b.Property<Guid>("Id")
@@ -102,6 +150,31 @@ namespace Hotel.Api.Migrations.Master
                         .IsUnique();
 
                     b.ToTable("CustomersGlobal");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.Facility", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Icon")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("Facilities");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Master.HeroBanner", b =>
@@ -146,6 +219,143 @@ namespace Hotel.Api.Migrations.Master
                     b.HasIndex("IsActive", "SortOrder");
 
                     b.ToTable("HeroBanners");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.Hotel", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Address")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("BranchCode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("BrandId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CityId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<double>("Latitude")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("Longitude")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<double>("Rating")
+                        .HasColumnType("double precision");
+
+                    b.Property<int>("ReviewCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("StarRating")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BranchCode")
+                        .IsUnique();
+
+                    b.HasIndex("BrandId");
+
+                    b.HasIndex("Slug")
+                        .IsUnique();
+
+                    b.HasIndex("CityId", "IsActive");
+
+                    b.ToTable("Hotels");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.HotelFacility", b =>
+                {
+                    b.Property<Guid>("HotelId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("FacilityId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("HotelId", "FacilityId");
+
+                    b.HasIndex("FacilityId");
+
+                    b.ToTable("HotelFacilities");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.HotelImage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("HotelId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsPrimary")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("HotelId");
+
+                    b.ToTable("HotelImages");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.NearbyPlace", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Distance")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("DistanceKm")
+                        .HasColumnType("numeric");
+
+                    b.Property<Guid>("HotelId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("HotelId");
+
+                    b.ToTable("NearbyPlaces");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Master.Staff", b =>
@@ -209,6 +419,65 @@ namespace Hotel.Api.Migrations.Master
                     b.ToTable("StaffBranches");
                 });
 
+            modelBuilder.Entity("Hotel.Api.Entities.Master.Hotel", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Master.Brand", "Brand")
+                        .WithMany("Hotels")
+                        .HasForeignKey("BrandId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Hotel.Api.Entities.Master.City", "City")
+                        .WithMany("Hotels")
+                        .HasForeignKey("CityId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Brand");
+
+                    b.Navigation("City");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.HotelFacility", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Master.Facility", "Facility")
+                        .WithMany("HotelFacilities")
+                        .HasForeignKey("FacilityId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Hotel.Api.Entities.Master.Hotel", "Hotel")
+                        .WithMany("HotelFacilities")
+                        .HasForeignKey("HotelId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Facility");
+
+                    b.Navigation("Hotel");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.HotelImage", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Master.Hotel", "Hotel")
+                        .WithMany("Images")
+                        .HasForeignKey("HotelId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Hotel");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.NearbyPlace", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Master.Hotel", "Hotel")
+                        .WithMany("NearbyPlaces")
+                        .HasForeignKey("HotelId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Hotel");
+                });
+
             modelBuilder.Entity("Hotel.Api.Entities.Master.StaffBranch", b =>
                 {
                     b.HasOne("Hotel.Api.Entities.Master.Branch", "Branch")
@@ -231,6 +500,30 @@ namespace Hotel.Api.Migrations.Master
             modelBuilder.Entity("Hotel.Api.Entities.Master.Branch", b =>
                 {
                     b.Navigation("StaffBranches");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.Brand", b =>
+                {
+                    b.Navigation("Hotels");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.City", b =>
+                {
+                    b.Navigation("Hotels");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.Facility", b =>
+                {
+                    b.Navigation("HotelFacilities");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.Hotel", b =>
+                {
+                    b.Navigation("HotelFacilities");
+
+                    b.Navigation("Images");
+
+                    b.Navigation("NearbyPlaces");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Master.Staff", b =>

@@ -1,102 +1,449 @@
-import Image from "next/image";
-import { differenceInCalendarDays } from "date-fns";
+"use client";
 
+import Image from "next/image";
+import Link from "next/link";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import * as Icons from "lucide-react";
 import { BranchRouteSync } from "@/features/tenant/components/BranchRouteSync";
 import { BranchSearchForm } from "@/features/tenant/components/BranchSearchForm";
-import { RoomList } from "@/features/rooms/components/RoomList";
 import { Navbar } from "@/components/layout/navbar";
+import {
+  addOrderItem,
+  deleteOrderItem,
+  getCurrentOrder,
+} from "@/services/order.service";
+import { getHotelFull } from "@/services/hotel.service";
 
 type Props = {
-  params: {
-    branch: string;
-  };
+  params: { branch: string };
   searchParams: {
     checkIn?: string;
     checkOut?: string;
-    adult?: string;
-    child?: string;
+    total_rooms?: string;
   };
 };
 
+function formatDistance(d: number) {
+  if (d < 1) return `${Math.round(d * 1000)} m`;
+  return `${d.toFixed(1)} km`;
+}
+
 export default function BranchHotelPage({ params, searchParams }: Props) {
+  const toImageUrl = (url: string) =>
+    /^https?:\/\//i.test(url)
+      ? url
+      : "https://images.unsplash.com/photo-1566665797739-1674de7a421a?w=1200&q=80";
+
   const branch = params.branch.toUpperCase();
+  const checkIn = searchParams.checkIn ?? "";
+  const checkOut = searchParams.checkOut ?? "";
+  const totalRooms = Number(searchParams.total_rooms ?? "1");
+  const [isOrderOpen, setIsOrderOpen] = useState(false);
 
-  const checkIn = searchParams.checkIn;
-  const checkOut = searchParams.checkOut;
-  const adultCount = Number(searchParams.adult ?? "2");
-  const childCount = Number(searchParams.child ?? "0");
+  const hotelQuery = useQuery({
+    queryKey: ["hotel-full", branch, checkIn, checkOut, totalRooms],
+    queryFn: () =>
+      getHotelFull({
+        branch,
+        checkIn,
+        checkOut,
+        adult: totalRooms,
+        child: 0,
+      }),
+    enabled: Boolean(branch && checkIn && checkOut),
+  });
 
-  const hasRequiredSearch = Boolean(checkIn && checkOut);
+  const orderQuery = useQuery({
+    queryKey: ["order-current", branch],
+    queryFn: getCurrentOrder,
+  });
 
-  let isValidDateRange = false;
+  const addMutation = useMutation({
+    mutationFn: addOrderItem,
+    onSuccess: () => orderQuery.refetch(),
+  });
 
-  if (checkIn && checkOut) {
-    const checkInDate = new Date(checkIn);
-    const checkOutDate = new Date(checkOut);
+  const deleteMutation = useMutation({
+    mutationFn: deleteOrderItem,
+    onSuccess: () => orderQuery.refetch(),
+  });
 
-    isValidDateRange =
-      !isNaN(checkInDate.getTime()) &&
-      !isNaN(checkOutDate.getTime()) &&
-      differenceInCalendarDays(checkOutDate, checkInDate) > 0;
-  }
+  const hotel = useMemo(() => hotelQuery.data?.hotel, [hotelQuery.data]);
+  const images = useMemo(
+    () => hotelQuery.data?.images ?? [],
+    [hotelQuery.data?.images],
+  );
+
+  const order = orderQuery.data;
+
+  const roomTypes = useMemo(
+    () => hotelQuery.data?.roomTypes ?? [],
+    [hotelQuery.data?.roomTypes],
+  );
+
+  console.log("roomTypes", roomTypes);
+
+  const facilities = useMemo(
+    () => hotelQuery.data?.facilities ?? [],
+    [hotelQuery.data?.facilities],
+  );
+
+  const nearby = useMemo(
+    () => hotelQuery.data?.nearby ?? [],
+    [hotelQuery.data?.nearby],
+  );
+
+  const priceFrom = useMemo(() => {
+    const prices = roomTypes.flatMap((rt) =>
+      rt.ratePlans.map((rp) => rp.price),
+    );
+
+    return prices.length > 0 ? Math.min(...prices) : 0;
+  }, [roomTypes]);
+
+  const imageList = useMemo(() => images.slice(0, 5), [images]);
+
+  const sortedNearby = useMemo(() => {
+    return [...nearby].sort((a, b) => a.distanceKm - b.distanceKm);
+  }, [nearby]);
 
   return (
     <main className="min-h-screen bg-slate-50">
       <BranchRouteSync branch={branch} />
-
-      {/* ✅ NAVBAR */}
       <Navbar />
 
-      {/* HERO */}
-      <section className="relative h-[320px] w-full">
-        <Image
-          src="https://images.unsplash.com/photo-1566073771259-6a8506099945"
-          alt="Hotel"
-          fill
-          className="object-cover"
-        />
-
-        {/* overlay */}
-        <div className="absolute inset-0 bg-[#1a1f3c]/80" />
-
-        {/* content */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-white pt-16">
-          {/* pt-16 biar gak ketabrak navbar */}
-          <h1 className="text-3xl font-bold">Hotel {branch}</h1>
-        </div>
-      </section>
-
-      {/* SEARCH */}
-      <div className="-mt-12 relative z-30">
-        <div className="max-w-5xl mx-auto px-5">
-          <div className="bg-white rounded-2xl shadow-2xl p-5">
-            <BranchSearchForm branch={branch} />
-          </div>
+      <div className="border-b border-slate-100 bg-white pt-16">
+        <div className="mx-auto flex max-w-7xl items-center gap-2 px-6 py-3 text-xs text-slate-500">
+          <Link href="/">Home</Link>
+          <span>/</span>
+          <span>Hotel</span>
+          <span>/</span>
+          <span>{branch}</span>
         </div>
       </div>
 
-      {/* CONTENT */}
-      <div className="max-w-7xl mx-auto px-5 mt-16 pb-16">
-        {!hasRequiredSearch ? (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            Isi tanggal terlebih dahulu
-          </div>
-        ) : !isValidDateRange ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-            Rentang tanggal tidak valid
-          </div>
-        ) : (
-          <RoomList
-            branch={branch}
-            search={{
-              checkIn: checkIn!,
-              checkOut: checkOut!,
-              adultCount: Number.isNaN(adultCount) ? 1 : adultCount,
-              childCount: Number.isNaN(childCount) ? 0 : childCount,
-            }}
-          />
+      <div className="mx-auto max-w-7xl px-6 py-6">
+        {hotelQuery.isLoading && (
+          <p className="text-sm text-slate-500">Memuat detail hotel...</p>
+        )}
+        {hotelQuery.isError && (
+          <p className="text-sm text-red-600">Gagal memuat detail hotel.</p>
+        )}
+
+        {hotel && (
+          <>
+            <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-slate-900">
+                  {hotel.name}
+                </h1>
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <Icons.Star
+                        key={star}
+                        size={14}
+                        className={
+                          star <= Math.round(hotel.rating)
+                            ? "fill-amber-400 text-amber-400"
+                            : "fill-slate-200 text-slate-200"
+                        }
+                      />
+                    ))}
+                  </div>
+                  <span className="text-sm text-slate-600">
+                    {hotel.rating.toFixed(1)} ({hotel.reviewCount} reviews)
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center gap-1.5 text-sm text-slate-500">
+                  <Icons.MapPin size={14} className="text-[#c4a661]" />
+                  {hotel.address}
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-slate-400">Starts From</p>
+                <p className="text-2xl font-bold text-slate-900">
+                  Rp {priceFrom.toLocaleString("id-ID")}
+                </p>
+                <p className="text-xs text-slate-400">/night</p>
+              </div>
+            </div>
+
+            {imageList.length > 0 && (
+              <div className="mb-8 grid h-[380px] grid-cols-4 grid-rows-2 gap-2">
+                <div className="relative col-span-2 row-span-2 overflow-hidden rounded-l-xl">
+                  <Image
+                    src={toImageUrl(imageList[0].url)}
+                    alt={hotel.name}
+                    fill
+                    className="object-cover"
+                    unoptimized
+                  />
+                </div>
+                {imageList.slice(1).map((image, index) => (
+                  <div
+                    key={`${image.url}-${index}`}
+                    className="relative overflow-hidden"
+                  >
+                    <Image
+                      src={toImageUrl(image.url)}
+                      alt={`${hotel.name}-${index + 2}`}
+                      fill
+                      className="object-cover"
+                      unoptimized
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mb-10">
+              <BranchSearchForm branch={branch} />
+            </div>
+
+            <section className="mb-10">
+              <h2 className="mb-3 text-xl font-bold text-slate-800">
+                Overview
+              </h2>
+              <p className="max-w-4xl leading-relaxed text-slate-600">
+                {hotel.description}
+              </p>
+            </section>
+
+            <section className="mb-10">
+              <h2 className="mb-4 text-xl font-bold text-slate-800">
+                Facilities
+              </h2>
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+                {facilities.map((facility) => {
+                  const Icon = Icons[
+                    facility.icon as keyof typeof Icons
+                  ] as React.ComponentType<any>;
+
+                  return (
+                    <div
+                      key={facility.name}
+                      className="group flex items-center gap-3 rounded-2xl border border-[#e2e8f0] bg-white p-4 transition-all duration-200 hover:-translate-y-[2px] hover:shadow-md"
+                    >
+                      {/* ICON */}
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f8fafc] transition group-hover:bg-[#1a1f3c]/5">
+                        {Icon ? (
+                          <Icon size={18} className="text-[#1a1f3c]" />
+                        ) : (
+                          <span className="text-xs text-[#94a3b8]">?</span>
+                        )}
+                      </div>
+
+                      {/* TEXT */}
+                      <span className="text-sm font-medium text-[#0f172a]">
+                        {facility.name}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="mb-10 grid gap-6 md:grid-cols-2">
+              <div>
+                <h2 className="mb-4 text-xl font-bold text-slate-800">
+                  Location
+                </h2>
+                <iframe
+                  src={`https://maps.google.com/maps?q=${encodeURIComponent(`${hotel.name} ${hotel.latitude},${hotel.longitude}`)}&z=15&output=embed`}
+                  className="h-64 w-full rounded-xl border-0"
+                />
+              </div>
+              <div>
+                <h2 className="mb-4 text-xl font-bold text-slate-800">
+                  Nearby Places
+                </h2>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-2">
+                  {sortedNearby.map((item) => (
+                    <div
+                      key={item.name}
+                      className="group rounded-2xl border border-[#e2e8f0] bg-white p-4 transition-all duration-200 hover:-translate-y-[2px] hover:shadow-md"
+                    >
+                      {/* NAME */}
+                      <div className="text-sm font-medium text-[#0f172a] leading-snug">
+                        {item.name}
+                      </div>
+
+                      {/* DISTANCE */}
+                      <div className="mt-2 text-sm font-semibold text-[#c4a661]">
+                        {formatDistance(item.distanceKm)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h2 className="mb-4 text-xl font-bold text-slate-800">
+                Select Your Room
+              </h2>
+              <div className="space-y-5">
+                {roomTypes.map((roomType) => (
+                  <div
+                    key={roomType.id}
+                    className="rounded-xl border border-slate-200 bg-white p-5"
+                  >
+                    <div className="mb-4 flex flex-col gap-4 md:flex-row">
+                      <div className="relative h-40 w-full overflow-hidden rounded-lg md:w-56">
+                        <Image
+                          src={toImageUrl(roomType.image)}
+                          alt={roomType.name}
+                          fill
+                          className="object-cover"
+                          unoptimized
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="text-lg font-semibold text-slate-900">
+                          {roomType.name}
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {roomType.description}
+                        </p>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {roomType.capacity} guests | {roomType.bedType} |{" "}
+                          {roomType.size} m2
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {roomType.facilities.map((facility) => (
+                            <span
+                              key={facility}
+                              className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600"
+                            >
+                              {facility}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {roomType.ratePlans.map((ratePlan) => (
+                        <div
+                          key={ratePlan.id}
+                          className="flex flex-col items-start justify-between gap-3 rounded-lg border border-slate-200 p-4 md:flex-row md:items-center"
+                        >
+                          <div>
+                            <p className="font-semibold text-slate-900">
+                              {ratePlan.name}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              {ratePlan.benefits}
+                            </p>
+                            <p className="text-xs text-slate-400">
+                              {ratePlan.terms}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-lg font-bold text-[#c4a661]">
+                              Rp {ratePlan.price.toLocaleString("id-ID")}
+                            </p>
+                            <p className="text-xs text-slate-400">per night</p>
+                            <button
+                              onClick={() =>
+                                addMutation.mutate({
+                                  roomTypeId: roomType.id,
+                                  ratePlanId: ratePlan.id,
+                                  checkIn,
+                                  checkOut,
+                                  totalRooms,
+                                })
+                              }
+                              className="mt-2 rounded-lg bg-[#1a1f3c] px-4 py-2 text-sm font-semibold text-white"
+                            >
+                              Select
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </>
         )}
       </div>
+
+      {order && order.items.length > 0 && (
+        <>
+          <button
+            onClick={() => setIsOrderOpen(true)}
+            className="fixed bottom-6 right-6 z-40 rounded-full bg-[#1a1f3c] px-5 py-3 text-sm font-semibold text-white shadow-lg"
+          >
+            View Order ({order.items.length})
+          </button>
+
+          {isOrderOpen && (
+            <div className="fixed inset-0 z-50 bg-black/35">
+              <div className="absolute right-0 top-0 h-full w-full max-w-md bg-white p-5 shadow-2xl">
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="text-lg font-semibold">Order Summary</h3>
+                  <button
+                    onClick={() => setIsOrderOpen(false)}
+                    className="text-sm text-slate-500"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="space-y-3 overflow-auto">
+                  {order.items.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-lg border border-slate-200 p-3"
+                    >
+                      <p className="font-semibold text-slate-900">
+                        {item.roomTypeName}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {item.ratePlanName}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {item.checkIn} - {item.checkOut}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {item.totalRooms} room(s)
+                      </p>
+                      <p className="mt-1 font-semibold text-[#c4a661]">
+                        Rp {item.totalPrice.toLocaleString("id-ID")}
+                      </p>
+                      <button
+                        onClick={() => deleteMutation.mutate(item.id)}
+                        className="mt-2 text-xs text-red-600 underline"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-6 border-t border-slate-200 pt-4">
+                  <div className="mb-4 flex items-center justify-between">
+                    <span className="text-sm text-slate-600">Grand Total</span>
+                    <span className="text-xl font-bold text-slate-900">
+                      Rp {order.grandTotal.toLocaleString("id-ID")}
+                    </span>
+                  </div>
+                  <Link
+                    href={`/booking?branch=${branch}`}
+                    className="block rounded-lg bg-[#1a1f3c] px-4 py-3 text-center text-sm font-semibold text-white"
+                  >
+                    Continue Booking
+                  </Link>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </main>
   );
 }

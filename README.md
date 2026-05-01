@@ -276,33 +276,25 @@ dotnet ef database update --context AppDbContext
 
 ### 5. Seed data development
 
-Seed master:
+Master seeder otomatis jalan saat startup aplikasi dan hanya membuat 1 akun `SUPER_ADMIN` jika belum ada:
 
-```bash
-dotnet run -- seed-master
-```
-
-Seed tenant default `hotel_sby`:
-
-```bash
-dotnet run -- seed-tenant
-```
-
-Seed tenant tertentu:
-
-```bash
-TENANT_CONNECTION_STRING="Host=localhost;Port=5432;Database=hotel_smg;Username=postgres;Password=postgres" \
-dotnet run -- seed-tenant
-```
-
-Seeder master membuat:
-
-- `SBY`
-- `MJK`
-- `JKT`
 - `superadmin@hotel.test`
-- `spv.sby@hotel.test`
-- `fo.sby@hotel.test`
+
+Tenant seeder tidak auto-run dan dipanggil manual via endpoint admin:
+
+```http
+POST /api/admin/seed
+```
+
+Endpoint ini idempotent (aman dijalankan berulang) dan mengisi dummy OTA data:
+
+- 2-3 `RoomTypes`
+- >=2 `RatePlans` per room type
+- kombinasi refundable/non-refundable
+- kombinasi breakfast/non-breakfast
+- `RoomTypeFacilities`
+- sample `Rooms` + `RoomAvailabilities`
+- `NearbyPlaces` di master untuk hotel terkait branch
 
 Password default seed:
 
@@ -353,6 +345,26 @@ GET /api/hotel/{branch}/full?checkIn=2026-09-01&checkOut=2026-09-03&adult=2&chil
 
 Endpoint ini menggabungkan data master (`Branches`) dan data tenant (`Rooms`, `RoomTypes`, `RoomImages`, `RoomAvailabilities`) tanpa menduplikasi data hotel ke tenant.
 Endpoint ini memakai Redis cache dengan key berbasis `branch`, `checkIn`, `checkOut`, jumlah adult, dan child.
+
+Payload sekarang sudah OTA-ready:
+
+- `hotel` metadata lengkap
+- `images`
+- `facilities`
+- `nearby`
+- `roomTypes[].ratePlans[]`
+
+### Public Hotel Search (OTA)
+
+```http
+GET /api/public/hotels/search?q=surabaya&checkIn=2026-09-01&checkOut=2026-09-03&totalRooms=1&minPrice=400000&maxPrice=1500000&stars=4,5&brandNames=Santika,Amaris
+```
+
+Endpoint ini mendukung:
+
+- `type` detection: `city` atau `hotel`
+- filter `price range`, `stars`, dan `brandNames`
+- response list hotel dengan `priceFrom` dari tenant rate plan
 
 ### Dynamic Banners
 
@@ -432,6 +444,70 @@ Contoh create staff:
 }
 ```
 
+### Master Data Management (Super Admin)
+
+Endpoint baru untuk OTA master data:
+
+```http
+GET    /api/admin/cities?q=
+GET    /api/admin/cities/{id}
+POST   /api/admin/cities
+PUT    /api/admin/cities/{id}
+DELETE /api/admin/cities/{id}
+```
+
+```http
+GET    /api/admin/brands?q=
+GET    /api/admin/brands/{id}
+POST   /api/admin/brands
+PUT    /api/admin/brands/{id}
+DELETE /api/admin/brands/{id}
+```
+
+```http
+GET    /api/admin/facilities?q=
+GET    /api/admin/facilities/{id}
+POST   /api/admin/facilities
+PUT    /api/admin/facilities/{id}
+DELETE /api/admin/facilities/{id}
+```
+
+```http
+GET    /api/admin/hotels?q=
+GET    /api/admin/hotels/{id}
+POST   /api/admin/hotels
+PUT    /api/admin/hotels/{id}
+DELETE /api/admin/hotels/{id}
+POST   /api/admin/hotels/{id}/images
+DELETE /api/admin/hotels/{id}/images/{imageId}
+POST   /api/admin/hotels/{id}/facilities
+POST   /api/admin/hotels/{id}/nearby-places
+DELETE /api/admin/hotels/{id}/nearby-places/{nearbyPlaceId}
+```
+
+Validasi utama hotel:
+
+- `CityId` harus valid
+- `BranchCode` harus ada di `Branches`
+- `BranchCode` tidak boleh dipakai hotel lain
+- `Slug` unik
+
+Semua endpoint ini hanya untuk role `SUPER_ADMIN`.
+
+### Master Data Seeder
+
+Seeder tambahan:
+
+- `MasterDataSeeder` (idempotent)
+
+Seed data:
+
+- Cities: Surabaya, Jakarta, Bali
+- Brands: Santika, Amaris
+- Sample hotel yang terhubung ke branch code yang sudah ada di `Branches`
+
+Seeder ini dijalankan saat startup bersama `MasterDbSeeder`.
+
 ### SPV Room Types
 
 ```http
@@ -497,6 +573,49 @@ Anti double booking:
 - tenant transaction memakai `Serializable`
 - unique index `RoomId + Date`
 - race condition sudah diuji dengan 10 request bersamaan, hasilnya 1 sukses dan 9 gagal
+
+### Order Draft (OTA)
+
+Endpoint order draft untuk flow pilih rate plan -> checkout:
+
+```http
+POST   /api/order/add
+GET    /api/order/current
+DELETE /api/order/item/{orderItemId}
+```
+
+Order menyimpan:
+
+- `roomTypeId`
+- `ratePlanId`
+- tanggal check-in/check-out
+- jumlah kamar
+- kalkulasi total (`price * nights * rooms`)
+
+Finalisasi order menjadi booking multi-room:
+
+```http
+POST /api/booking/checkout-order
+```
+
+Contoh body:
+
+```json
+{
+  "adultCount": 2,
+  "childCount": 0,
+  "paymentMethod": "mock",
+  "notes": "late check-in"
+}
+```
+
+Endpoint ini akan:
+
+1. membaca `OrderDraft` aktif customer
+2. mengalokasikan jumlah kamar sesuai `OrderItem.TotalRooms` (room type yang sama)
+3. lock `RoomAvailabilities` secara transaksi `Serializable`
+4. membuat booking per kamar (1 kamar = 1 booking code)
+5. menandai draft menjadi `checked_out`
 
 ### Payment
 
@@ -767,6 +886,30 @@ Catatan:
 - Setelah branch dipilih, request tenant/public-room (`/api/public/rooms/availability/search`, `/api/booking`, dst) wajib membawa `X-Branch-Code`.
 
 Ini berarti `X-Branch-Code` bisa sepenuhnya dikendalikan dari input/pilihan user, tidak perlu subdomain.
+
+Update OTA flow frontend yang sudah aktif:
+
+1. Home search submit ke `/api/public/hotels/search`.
+2. Jika response `type=hotel` -> redirect `/hotel/{branch}`.
+3. Jika response `type=city` -> redirect `/search`.
+4. Halaman `/search` sudah pakai filter URL-synced:
+   - `minPrice`, `maxPrice`
+   - `stars`
+   - `brands` (brand names)
+5. Halaman `/hotel/[branch]` sudah bind full ke `/api/hotel/{branch}/full` tanpa data dummy.
+6. Pemilihan kamar memakai `ratePlans` dan tombol `Select` menulis ke `/api/order/add`.
+7. Tersedia floating `View Order` panel untuk ringkasan order draft.
+
+Update admin frontend yang sudah ditambahkan:
+
+1. `/admin/master/cities` untuk CRUD cities.
+2. `/admin/master/brands` untuk CRUD brands + upload logo via `/api/uploads/images`.
+3. `/admin/master/facilities` untuk CRUD facilities.
+4. `/admin/master/hotels` untuk CRUD hotel +:
+   - assign city/brand/branch
+   - upload/delete hotel images
+   - set hotel facilities
+   - add/remove nearby places
 
 ## Docker & Nginx
 

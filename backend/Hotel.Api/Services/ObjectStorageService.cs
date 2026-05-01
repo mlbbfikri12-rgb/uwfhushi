@@ -42,8 +42,11 @@ public class ObjectStorageService : IObjectStorageService
         if (!AllowedContentTypes.Contains(file.ContentType))
             throw new Exception("Only jpeg, png, webp, and avif images are allowed");
 
-        if (string.IsNullOrWhiteSpace(_settings.UploadEndpoint))
+        if (!_settings.Provider.Equals("Local", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(_settings.UploadEndpoint))
+        {
             throw new Exception("Storage upload endpoint is not configured");
+        }
 
         var safeFolder = string.IsNullOrWhiteSpace(folder) ? "uploads" : folder.Trim().ToLowerInvariant();
         var objectKey = $"{safeFolder}/{Guid.NewGuid():N}.webp";
@@ -109,14 +112,17 @@ public class ObjectStorageService : IObjectStorageService
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         await File.WriteAllBytesAsync(fullPath, bytes, cancellationToken);
 
-        var publicBaseUrl = string.IsNullOrWhiteSpace(_settings.PublicBaseUrl)
-            ? "/uploads"
-            : _settings.PublicBaseUrl.TrimEnd('/');
+        var publicBaseUrl = _settings.PublicBaseUrl?.TrimEnd('/');
+
+        if (string.IsNullOrWhiteSpace(publicBaseUrl))
+            throw new Exception("PublicBaseUrl must be configured for local storage");
+
+
 
         return new UploadImageResponseDto
         {
             ObjectKey = objectKey,
-            Url = $"{publicBaseUrl}/{objectKey}"
+            Url = $"{publicBaseUrl}/{objectKey}".Replace("\\", "/")
         };
     }
 }

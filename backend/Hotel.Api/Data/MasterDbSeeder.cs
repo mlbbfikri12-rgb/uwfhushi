@@ -7,36 +7,36 @@ public static class MasterDbSeeder
 {
     public static async Task SeedAsync(MasterDbContext db)
     {
-        var branches = new[]
-        {
-            new BranchSeed("Hotel Surabaya", "SBY", "hotel_sby"),
-            new BranchSeed("Hotel Mojokerto", "MJK", "hotel_mjk"),
-            new BranchSeed("Hotel Jakarta", "JKT", "hotel_jkt")
-        };
+        // var branches = new[]
+        // {
+        //     new BranchSeed("Hotel Surabaya", "SBY", "hotel_sby"),
+        //     new BranchSeed("Hotel Mojokerto", "MJK", "hotel_mjk"),
+        //     new BranchSeed("Hotel Jakarta", "JKT", "hotel_jkt")
+        // };
 
-        foreach (var seed in branches)
-        {
-            var branch = await db.Branches.FirstOrDefaultAsync(b => b.Code == seed.Code);
+        // foreach (var seed in branches)
+        // {
+        //     var branch = await db.Branches.FirstOrDefaultAsync(b => b.Code == seed.Code);
 
-            if (branch == null)
-            {
-                db.Branches.Add(new Branch
-                {
-                    Id = Guid.NewGuid(),
-                    Name = seed.Name,
-                    Code = seed.Code,
-                    DbName = seed.DbName,
-                    DbHost = "localhost",
-                    DbPort = 5432,
-                    DbUser = "postgres",
-                    DbPassword = "postgres",
-                    IsActive = true,
-                    CreatedAt = DateTime.UtcNow
-                });
-            }
-        }
+        //     if (branch == null)
+        //     {
+        //         db.Branches.Add(new Branch
+        //         {
+        //             Id = Guid.NewGuid(),
+        //             Name = seed.Name,
+        //             Code = seed.Code,
+        //             DbName = seed.DbName,
+        //             DbHost = "localhost",
+        //             DbPort = 5432,
+        //             DbUser = "postgres",
+        //             DbPassword = "postgres",
+        //             IsActive = true,
+        //             CreatedAt = DateTime.UtcNow
+        //         });
+        //     }
+        // }
 
-        await db.SaveChangesAsync();
+        //await db.SaveChangesAsync();
 
         var superAdmin = await db.Staffs.FirstOrDefaultAsync(s => s.Email == "superadmin@hotel.test");
         if (superAdmin == null)
@@ -55,11 +55,11 @@ public static class MasterDbSeeder
 
         await db.SaveChangesAsync();
 
-        var sby = await db.Branches.FirstAsync(b => b.Code == "SBY");
-        await EnsureBranchStaffAsync(db, "spv.sby@hotel.test", "SPV Surabaya", StaffRoles.SPV, sby.Id);
-        await EnsureBranchStaffAsync(db, "fo.sby@hotel.test", "FO Surabaya", StaffRoles.FO, sby.Id);
+        // var sby = await db.Branches.FirstAsync(b => b.Code == "SBY");
+        // await EnsureBranchStaffAsync(db, "spv.sby@hotel.test", "SPV Surabaya", StaffRoles.SPV, sby.Id);
+        // await EnsureBranchStaffAsync(db, "fo.sby@hotel.test", "FO Surabaya", StaffRoles.FO, sby.Id);
 
-        await db.SaveChangesAsync();
+        // await db.SaveChangesAsync();
     }
 
     private static async Task EnsureBranchStaffAsync(

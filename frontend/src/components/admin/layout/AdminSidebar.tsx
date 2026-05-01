@@ -53,6 +53,30 @@ export function AdminSidebar({ role }: Props) {
             >
               Banner
             </Link>
+            <Link
+              href="/admin/master/cities"
+              className={`block px-3 py-2 rounded ${active("/admin/master/cities")}`}
+            >
+              Master Cities
+            </Link>
+            <Link
+              href="/admin/master/brands"
+              className={`block px-3 py-2 rounded ${active("/admin/master/brands")}`}
+            >
+              Master Brands
+            </Link>
+            <Link
+              href="/admin/master/hotels"
+              className={`block px-3 py-2 rounded ${active("/admin/master/hotels")}`}
+            >
+              Master Hotels
+            </Link>
+            <Link
+              href="/admin/master/facilities"
+              className={`block px-3 py-2 rounded ${active("/admin/master/facilities")}`}
+            >
+              Master Facilities
+            </Link>
           </>
         )}
 

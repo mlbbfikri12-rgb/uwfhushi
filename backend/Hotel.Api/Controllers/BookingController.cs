@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Hotel.Api.Services;
 using Hotel.Api.DTOs;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
 
 namespace Hotel.Api.Controllers;
@@ -74,6 +75,26 @@ public class BookingController : ControllerBase
             {
                 error = ex.Message
             });
+        }
+    }
+
+    [HttpPost("checkout-order")]
+    [Authorize(Policy = "CustomerOnly")]
+    [EnableRateLimiting("booking")]
+    public async Task<IActionResult> CheckoutFromOrder([FromBody] CheckoutOrderDto dto)
+    {
+        try
+        {
+            var customerIdValue = User.FindFirstValue("customer_id");
+            if (!Guid.TryParse(customerIdValue, out var customerGlobalId))
+                return Unauthorized(new { error = "Invalid customer session" });
+
+            var result = await _bookingService.CheckoutFromOrderAsync(customerGlobalId, dto);
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
         }
     }
 }

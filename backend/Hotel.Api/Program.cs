@@ -117,11 +117,18 @@ builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IBranchProvisioningService, BranchProvisioningService>();
 builder.Services.AddScoped<IStaffAdminService, StaffAdminService>();
 builder.Services.AddScoped<IRoomManagementService, RoomManagementService>();
+builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<ICacheService, RedisCacheService>();
 builder.Services.AddScoped<IPublicBranchService, PublicBranchService>();
+builder.Services.AddScoped<IPublicHotelSearchService, PublicHotelSearchService>();
 builder.Services.AddScoped<IHotelPublicService, HotelPublicService>();
+builder.Services.AddScoped<ICityService, CityService>();
+builder.Services.AddScoped<IBrandService, BrandService>();
+builder.Services.AddScoped<IFacilityService, FacilityService>();
+builder.Services.AddScoped<IHotelAdminService, HotelAdminService>();
 builder.Services.AddScoped<IBannerService, BannerService>();
 builder.Services.AddScoped<IBookingEmailService, BookingEmailService>();
+builder.Services.AddScoped<ITenantSeedService, TenantSeedService>();
 builder.Services.AddHttpClient<IObjectStorageService, ObjectStorageService>();
 
 builder.Services.AddDbContext<MasterDbContext>(options =>
@@ -160,6 +167,7 @@ if (!string.IsNullOrWhiteSpace(jwtKey))
                         path.StartsWithSegments("/api/staff", StringComparison.OrdinalIgnoreCase) ||
                         path.StartsWithSegments("/api/rooms", StringComparison.OrdinalIgnoreCase) ||
                         path.StartsWithSegments("/api/room-types", StringComparison.OrdinalIgnoreCase) ||
+                        path.StartsWithSegments("/api/admin", StringComparison.OrdinalIgnoreCase) ||
                         path.StartsWithSegments("/api/auth/staff", StringComparison.OrdinalIgnoreCase) ||
                         path.StartsWithSegments("/auth/staff", StringComparison.OrdinalIgnoreCase) ||
                         path.StartsWithSegments("/api/uploads", StringComparison.OrdinalIgnoreCase)
@@ -224,11 +232,19 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+using (var startupScope = app.Services.CreateScope())
+{
+    var masterDb = startupScope.ServiceProvider.GetRequiredService<MasterDbContext>();
+    await MasterDbSeeder.SeedAsync(masterDb);
+    await MasterDataSeeder.SeedAsync(masterDb);
+}
+
 if (args.Contains("seed-master", StringComparer.OrdinalIgnoreCase))
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
     await MasterDbSeeder.SeedAsync(db);
+    await MasterDataSeeder.SeedAsync(db);
     Console.WriteLine("Master database seeded.");
     return;
 }

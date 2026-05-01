@@ -6,8 +6,18 @@ type Props = {
   roomId: string;
   checkIn: string;
   checkOut: string;
-  adult?: string;
-  child?: string;
+  adult?: number;
+  child?: number;
+};
+
+type BookingFormValues = {
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  adult: number;
+  child: number;
+  notes?: string;
 };
 
 export function BookingForm({
@@ -17,9 +27,9 @@ export function BookingForm({
   adult,
   child,
 }: Props) {
-  const { register, handleSubmit } = useForm();
+  const { register, handleSubmit } = useForm<BookingFormValues>();
 
-  const onSubmit = (data: any) => {
+  const onSubmit = (data: BookingFormValues) => {
     console.log("BOOKING:", {
       ...data,
       roomId,
@@ -71,16 +81,15 @@ export function BookingForm({
 
         <div className="grid grid-cols-2 gap-3">
           <input
-            defaultValue={adult}
-            {...register("adult")}
+            defaultValue={adult ?? 1}
+            {...register("adult", { valueAsNumber: true })}
             type="number"
-            className="rounded-lg border px-3 py-2"
           />
+
           <input
-            defaultValue={child}
-            {...register("child")}
+            defaultValue={child ?? 0}
+            {...register("child", { valueAsNumber: true })}
             type="number"
-            className="rounded-lg border px-3 py-2"
           />
         </div>
       </div>

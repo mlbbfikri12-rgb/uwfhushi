@@ -17,7 +17,7 @@ namespace Hotel.Api.Migrations.Tenant
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "8.0.5")
+                .HasAnnotation("ProductVersion", "8.0.8")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -128,6 +128,76 @@ namespace Hotel.Api.Migrations.Tenant
                     b.ToTable("Customers");
                 });
 
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.OrderDraft", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerId", "Status");
+
+                    b.ToTable("OrderDrafts");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.OrderItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CheckIn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CheckOut")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrderDraftId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("PricePerNight")
+                        .HasColumnType("numeric");
+
+                    b.Property<Guid>("RatePlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("RoomTypeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("TotalPrice")
+                        .HasColumnType("numeric");
+
+                    b.Property<int>("TotalRooms")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RatePlanId");
+
+                    b.HasIndex("RoomTypeId");
+
+                    b.HasIndex("OrderDraftId", "RoomTypeId", "RatePlanId");
+
+                    b.ToTable("OrderItems");
+                });
+
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.Payment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -162,6 +232,46 @@ namespace Hotel.Api.Migrations.Tenant
                     b.HasIndex("BookingId");
 
                     b.ToTable("Payments");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.RatePlan", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IncludesBreakfast")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsRefundable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PaymentType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("Price")
+                        .HasColumnType("numeric");
+
+                    b.Property<Guid>("RoomTypeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TermsConditions")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RoomTypeId", "IsActive");
+
+                    b.ToTable("RatePlans");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.Room", b =>
@@ -256,10 +366,21 @@ namespace Hotel.Api.Migrations.Tenant
                     b.Property<decimal>("BasePrice")
                         .HasColumnType("numeric");
 
+                    b.Property<string>("BedType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Capacity")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ImageUrl")
                         .IsRequired()
                         .HasColumnType("text");
 
@@ -273,9 +394,32 @@ namespace Hotel.Api.Migrations.Tenant
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int>("Size")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.ToTable("RoomTypes");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.RoomTypeFacility", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("RoomTypeId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RoomTypeId");
+
+                    b.ToTable("RoomTypeFacilities");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.Booking", b =>
@@ -295,6 +439,55 @@ namespace Hotel.Api.Migrations.Tenant
                     b.Navigation("Customer");
 
                     b.Navigation("Room");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.OrderDraft", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Tenant.Customer", "Customer")
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Customer");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.OrderItem", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Tenant.OrderDraft", "OrderDraft")
+                        .WithMany("Items")
+                        .HasForeignKey("OrderDraftId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Hotel.Api.Entities.Tenant.RatePlan", "RatePlan")
+                        .WithMany()
+                        .HasForeignKey("RatePlanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Hotel.Api.Entities.Tenant.RoomType", "RoomType")
+                        .WithMany()
+                        .HasForeignKey("RoomTypeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("OrderDraft");
+
+                    b.Navigation("RatePlan");
+
+                    b.Navigation("RoomType");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.RatePlan", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Tenant.RoomType", "RoomType")
+                        .WithMany("RatePlans")
+                        .HasForeignKey("RoomTypeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("RoomType");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.Room", b =>
@@ -319,9 +512,25 @@ namespace Hotel.Api.Migrations.Tenant
                     b.Navigation("Room");
                 });
 
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.RoomTypeFacility", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Tenant.RoomType", "RoomType")
+                        .WithMany("Facilities")
+                        .HasForeignKey("RoomTypeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("RoomType");
+                });
+
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.Customer", b =>
                 {
                     b.Navigation("Bookings");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.OrderDraft", b =>
+                {
+                    b.Navigation("Items");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.Room", b =>
@@ -333,6 +542,10 @@ namespace Hotel.Api.Migrations.Tenant
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.RoomType", b =>
                 {
+                    b.Navigation("Facilities");
+
+                    b.Navigation("RatePlans");
+
                     b.Navigation("Rooms");
                 });
 #pragma warning restore 612, 618

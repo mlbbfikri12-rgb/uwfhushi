@@ -1,4 +1,6 @@
-export function enrichRoom(room: any) {
+import { Room } from "@/types/room";
+
+export function enrichRoom(room: Room) {
     const dummyImages = [
         "https://images.unsplash.com/photo-1631049307264-da0ec9d70304",
         "https://images.unsplash.com/photo-1566665797739-1674de7a421a",

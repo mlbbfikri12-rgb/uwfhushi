@@ -3,16 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { updateRoomStatus } from "@/services/admin.service";
 import { toast } from "sonner";
-
-type Room = {
-  id: string;
-  roomNumber: string;
-  status: "available" | "maintenance" | "occupied";
-  roomType: {
-    name: string;
-    basePrice: number;
-  };
-};
+import type { Room } from "@/types/room";
 
 export function RoomTable({
   rooms,
@@ -24,16 +15,16 @@ export function RoomTable({
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
+    mutationFn: ({ id, status }: { id: string; status: NonNullable<Room["status"]> }) =>
       updateRoomStatus(id, status),
 
     // 🔥 OPTIMISTIC UPDATE
     onMutate: async ({ id, status }) => {
       await queryClient.cancelQueries({ queryKey: ["rooms"] });
 
-      const prev = queryClient.getQueryData<any>(["rooms"]);
+      const prev = queryClient.getQueryData<Room[]>(["rooms"]);
 
-      queryClient.setQueryData(["rooms"], (old: any[]) =>
+      queryClient.setQueryData(["rooms"], (old: Room[] | undefined) =>
         old?.map((room) => (room.id === id ? { ...room, status } : room)),
       );
 
@@ -56,7 +47,7 @@ export function RoomTable({
     },
   });
 
-  const badge = (status: string) => {
+  const badge = (status: NonNullable<Room["status"]>) => {
     if (status === "available") return "bg-green-100 text-green-700";
     if (status === "maintenance") return "bg-yellow-100 text-yellow-700";
     return "bg-red-100 text-red-700";
@@ -92,19 +83,19 @@ export function RoomTable({
 
               <td className="px-4 py-3">
                 <span
-                  className={`px-2 py-1 rounded text-xs ${badge(room.status)}`}
+                  className={`px-2 py-1 rounded text-xs ${badge(room.status!)}`}
                 >
-                  {room.status}
+                  {room.status ?? "available"}
                 </span>
               </td>
 
               <td className="px-4 py-3">
                 <select
-                  value={room.status}
+                  value={room.status ?? "available"}
                   onChange={(e) =>
                     mutation.mutate({
                       id: room.id,
-                      status: e.target.value,
+                      status: e.target.value as NonNullable<Room["status"]>,
                     })
                   }
                   className="border rounded px-2 py-1 text-xs"

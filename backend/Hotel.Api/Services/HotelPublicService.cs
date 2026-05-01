@@ -8,7 +8,7 @@ namespace Hotel.Api.Services;
 
 public interface IHotelPublicService
 {
-    Task<HotelFullDto> GetHotelFullAsync(
+    Task<HotelFullPublicDto> GetHotelFullAsync(
         string branch,
         DateTime checkIn,
         DateTime checkOut,
@@ -36,7 +36,7 @@ public class HotelPublicService : IHotelPublicService
         _validationSettings = validationSettings.Value;
     }
 
-    public async Task<HotelFullDto> GetHotelFullAsync(
+    public async Task<HotelFullPublicDto> GetHotelFullAsync(
         string branch,
         DateTime checkIn,
         DateTime checkOut,
@@ -51,9 +51,22 @@ public class HotelPublicService : IHotelPublicService
         ValidateRequest(branchCode, checkInDate, checkOutDate, adultCount, childCount);
 
         var cacheKey = $"hotel:full:{branchCode}:{checkInDate:yyyyMMdd}:{checkOutDate:yyyyMMdd}:adult:{adultCount}:child:{childCount}";
-        var cached = await _cache.GetAsync<HotelFullDto>(cacheKey, cancellationToken);
+        var cached = await _cache.GetAsync<HotelFullPublicDto>(cacheKey, cancellationToken);
         if (cached != null)
             return cached;
+
+        var hotel = await _masterDb.Hotels
+            .AsNoTracking()
+            .Include(h => h.City)
+            .Include(h => h.Brand)
+            .Include(h => h.Images)
+            .Include(h => h.HotelFacilities)
+            .ThenInclude(hf => hf.Facility)
+            .Include(h => h.NearbyPlaces)
+            .FirstOrDefaultAsync(h => h.BranchCode == branchCode && h.IsActive, cancellationToken);
+
+        if (hotel == null)
+            throw new Exception("Hotel not found");
 
         var branchEntity = await _masterDb.Branches
             .AsNoTracking()
@@ -71,56 +84,84 @@ public class HotelPublicService : IHotelPublicService
             .Select(offset => checkInDate.AddDays(offset))
             .ToList();
 
-        var rooms = await tenantDb.Rooms
+        var roomTypes = await tenantDb.RoomTypes
             .AsNoTracking()
-            .Where(r =>
-                r.Status == "available" &&
-                r.RoomType.MaxAdults >= adultCount &&
-                r.RoomType.MaxChildren >= childCount &&
-                !tenantDb.RoomAvailabilities.Any(a =>
-                    a.RoomId == r.Id &&
-                    dates.Contains(a.Date) &&
-                    !a.IsAvailable))
-            .OrderBy(r => r.RoomType.BasePrice)
-            .ThenBy(r => r.RoomNumber)
-            .Select(r => new RoomResponseDto
+            .Where(rt =>
+                rt.MaxAdults >= adultCount &&
+                rt.MaxChildren >= childCount &&
+                rt.Rooms.Any(r =>
+                    r.Status == "available" &&
+                    !tenantDb.RoomAvailabilities.Any(a =>
+                        a.RoomId == r.Id &&
+                        dates.Contains(a.Date) &&
+                        !a.IsAvailable)))
+            .OrderBy(rt => rt.BasePrice)
+            .Select(rt => new HotelRoomTypeDto
             {
-                Id = r.Id,
-                RoomNumber = r.RoomNumber,
-                Status = r.Status,
-                RoomType = new RoomTypeResponseDto
-                {
-                    Id = r.RoomType.Id,
-                    Name = r.RoomType.Name,
-                    Description = r.RoomType.Description,
-                    BasePrice = r.RoomType.BasePrice,
-                    MaxAdults = r.RoomType.MaxAdults,
-                    MaxChildren = r.RoomType.MaxChildren
-                },
-                Images = r.Images
-                    .Select(i => new RoomImageResponseDto
+                Id = rt.Id,
+                Name = rt.Name,
+                Image = rt.ImageUrl,
+                Size = rt.Size,
+                BedType = rt.BedType,
+                Capacity = rt.Capacity,
+                Description = rt.Description,
+                Facilities = rt.Facilities.Select(f => f.Name).ToList(),
+                RatePlans = rt.RatePlans
+                    .Where(rp => rp.IsActive)
+                    .OrderBy(rp => rp.Price)
+                    .Select(rp => new RatePlanDto
                     {
-                        Id = i.Id,
-                        Url = i.Url,
-                        Format = i.Format
+                        Id = rp.Id,
+                        Name = rp.Name,
+                        Price = rp.Price,
+                        Benefits = BuildBenefits(rp.IncludesBreakfast, rp.IsRefundable, rp.PaymentType),
+                        Terms = rp.TermsConditions
                     })
                     .ToList()
             })
             .ToListAsync(cancellationToken);
 
-        var response = new HotelFullDto
+        var response = new HotelFullPublicDto
         {
-            Branch = new PublicBranchDto
+            Hotel = new PublicHotelMetaDto
             {
-                Id = branchEntity.Id,
-                Name = branchEntity.Name,
-                Code = branchEntity.Code
+                HotelId = hotel.Id,
+                BranchCode = hotel.BranchCode,
+                Name = hotel.Name,
+                Address = hotel.Address,
+                City = hotel.City?.Name ?? string.Empty,
+                Brand = hotel.Brand?.Name ?? string.Empty,
+                Rating = hotel.Rating,
+                ReviewCount = hotel.ReviewCount,
+                Description = hotel.Description,
+                Latitude = hotel.Latitude,
+                Longitude = hotel.Longitude
             },
-            Rooms = rooms,
-            CheckIn = checkInDate,
-            CheckOut = checkOutDate,
-            AdultCount = adultCount,
-            ChildCount = childCount
+            Images = hotel.Images
+                .OrderBy(i => i.SortOrder)
+                .Select(i => new HotelImageDto
+                {
+                    Url = i.Url,
+                    Type = i.Type,
+                    SortOrder = i.SortOrder
+                })
+                .ToList(),
+            Facilities = hotel.HotelFacilities
+                .Select(hf => new FacilityDto
+                {
+                    Name = hf.Facility!.Name,
+                    Icon = hf.Facility.Icon
+                })
+                .ToList(),
+            Nearby = hotel.NearbyPlaces
+                .OrderBy(np => np.DistanceKm)
+                .Select(np => new NearbyPlaceDto
+                {
+                    Name = np.Name,
+                    DistanceKm = np.DistanceKm
+                })
+                .ToList(),
+            RoomTypes = roomTypes
         };
 
         await _cache.SetAsync(
@@ -130,6 +171,18 @@ public class HotelPublicService : IHotelPublicService
             cancellationToken);
 
         return response;
+    }
+
+    private static string BuildBenefits(bool includesBreakfast, bool isRefundable, string paymentType)
+    {
+        var benefits = new List<string>();
+        if (includesBreakfast) benefits.Add("Breakfast");
+        if (isRefundable) benefits.Add("Refundable");
+        benefits.Add(paymentType.Equals("pay_at_hotel", StringComparison.OrdinalIgnoreCase)
+            ? "Pay at Hotel"
+            : "Online Payment");
+
+        return string.Join(", ", benefits);
     }
 
     private void ValidateRequest(string branchCode, DateTime checkInDate, DateTime checkOutDate, int adultCount, int childCount)
