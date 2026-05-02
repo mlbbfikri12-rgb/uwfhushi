@@ -2,7 +2,13 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { addDays, differenceInCalendarDays, format } from "date-fns";
-import { BedDouble, CalendarDays, MapPin, Search } from "lucide-react";
+import {
+  BedDouble,
+  Building2,
+  CalendarDays,
+  MapPin,
+  Search,
+} from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { type DateRange, DayPicker } from "react-day-picker";
@@ -10,10 +16,11 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useBranchSearchQuery } from "@/features/tenant/hooks/useBranchSearchQuery";
+import { searchPublicHotels } from "@/services/branch.service";
 import type { PublicBranch } from "@/types/branch";
 
 const searchSchema = z.object({
-  branchCode: z.string().min(2, "Pilih kota atau hotel"),
+  branchCode: z.string().optional(),
   dateRange: z.object({
     from: z.date({ required_error: "Check-in wajib diisi" }),
     to: z.date({ required_error: "Check-out wajib diisi" }),
@@ -56,6 +63,17 @@ export function BranchSearchForm({ branch }: Props) {
     },
   });
 
+  const getIcon = (type: string) => {
+    switch (type) {
+      case "city":
+        return <MapPin size={14} className="text-[#c4a661] shrink-0" />;
+      case "hotel":
+        return <Building2 size={14} className="text-slate-500 shrink-0" />;
+      default:
+        return <MapPin size={14} className="text-slate-400 shrink-0" />;
+    }
+  };
+
   const totalRooms = watch("totalRooms");
 
   useEffect(() => {
@@ -94,15 +112,6 @@ export function BranchSearchForm({ branch }: Props) {
     }
   }, [branch, setValue]);
 
-  useEffect(() => {
-    if (!selectedBranch && data && data.length > 0) {
-      const first = data[0];
-      setSelectedBranch(first);
-      setKeyword(first.name);
-      setValue("branchCode", first.code, { shouldValidate: true });
-    }
-  }, [data, selectedBranch, setValue]);
-
   const nights =
     dateRange?.from && dateRange?.to
       ? differenceInCalendarDays(dateRange.to, dateRange.from)
@@ -115,16 +124,30 @@ export function BranchSearchForm({ branch }: Props) {
     ? format(dateRange.to, "EEE, dd MMM yyyy")
     : "—";
 
-  const onSubmit = handleSubmit((values) => {
-    if (!values.branchCode) {
-      toast.error("Pilih kota atau hotel terlebih dahulu");
+  const onSubmit = handleSubmit(async (values) => {
+    if (!keyword.trim()) {
+      toast.error("Masukkan kota atau hotel");
       return;
     }
-    const b = values.branchCode.toUpperCase();
     const checkIn = format(values.dateRange.from, "yyyy-MM-dd");
     const checkOut = format(values.dateRange.to, "yyyy-MM-dd");
+
+    const result = await searchPublicHotels({
+      q: keyword.trim(),
+      checkIn,
+      checkOut,
+      totalRooms: values.totalRooms,
+    });
+
+    if (result.type === "hotel" && result.hotels.length > 0) {
+      router.push(
+        `/hotel/${result.hotels[0].slug}?checkIn=${checkIn}&checkOut=${checkOut}&total_rooms=${values.totalRooms}`,
+      );
+      return;
+    }
+
     router.push(
-      `/hotel/${b}?checkIn=${checkIn}&checkOut=${checkOut}&total_rooms=${values.totalRooms}&duration=${nights}`,
+      `/search?q=${encodeURIComponent(keyword.trim())}&checkIn=${checkIn}&checkOut=${checkOut}&total_rooms=${values.totalRooms}`,
     );
   });
 
@@ -157,9 +180,9 @@ export function BranchSearchForm({ branch }: Props) {
             data.length > 0 &&
             !selectedBranch &&
             keyword.length > 1 && (
-              <ul className="absolute left-0 top-full mt-2 z-50 w-72 bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden">
-                {data.map((b) => (
-                  <li key={b.id}>
+              <ul className="absolute left-0 top-full mt-2 z-50 w-full bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden">
+                {data.map((b, index) => (
+                  <li key={index}>
                     <button
                       type="button"
                       onClick={() => {
@@ -171,8 +194,15 @@ export function BranchSearchForm({ branch }: Props) {
                       }}
                       className="w-full flex items-center gap-3 px-4 py-3 text-left text-sm hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0"
                     >
-                      <MapPin size={14} className="text-[#c4a661] shrink-0" />
-                      <span className="text-slate-500">{b.name}</span>
+                      {getIcon(b.type)}
+
+                      <div className="flex flex-col">
+                        <span className="text-slate-700">{b.name}</span>
+
+                        <span className="text-xs text-slate-400 capitalize">
+                          {b.type}
+                        </span>
+                      </div>
                     </button>
                   </li>
                 ))}

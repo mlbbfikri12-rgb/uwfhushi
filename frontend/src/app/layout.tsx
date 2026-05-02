@@ -16,8 +16,32 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Multi-Tenant Hotel Booking",
-  description: "Centralized hotel booking frontend with branch-based tenancy",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
+  title: {
+    default: "Hotel Booking Platform",
+    template: "%s | Hotel Booking",
+  },
+  description: "Book hotels across Indonesia with best price and experience",
+  keywords: ["hotel", "booking", "hotel indonesia", "travel", "reservation"],
+  robots: {
+    index: true,
+    follow: true,
+  },
+  openGraph: {
+    type: "website",
+    siteName: "Hotel Booking",
+    url: process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+    images: [
+      {
+        url: "/opengraph-image.jpg",
+        width: 1200,
+        height: 630,
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+  },
 };
 
 export default function RootLayout({

@@ -15,6 +15,14 @@ public interface IHotelPublicService
         int adultCount,
         int childCount,
         CancellationToken cancellationToken = default);
+
+    Task<HotelFullPublicDto> GetHotelFullBySlugAsync(
+        string slug,
+        DateTime checkIn,
+        DateTime checkOut,
+        int adultCount,
+        int childCount,
+        CancellationToken cancellationToken = default);
 }
 
 public class HotelPublicService : IHotelPublicService
@@ -45,6 +53,41 @@ public class HotelPublicService : IHotelPublicService
         CancellationToken cancellationToken = default)
     {
         var branchCode = branch.Trim().ToUpperInvariant();
+        return await GetHotelFullInternalAsync(branchCode, checkIn, checkOut, adultCount, childCount, cancellationToken);
+    }
+
+    public async Task<HotelFullPublicDto> GetHotelFullBySlugAsync(
+        string slug,
+        DateTime checkIn,
+        DateTime checkOut,
+        int adultCount,
+        int childCount,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(slug))
+            throw new Exception("Slug is required");
+
+        var normalizedSlug = slug.Trim().ToLowerInvariant();
+        var hotel = await _masterDb.Hotels
+            .AsNoTracking()
+            .Where(h => h.IsActive && h.Slug == normalizedSlug)
+            .Select(h => new { h.BranchCode })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (hotel == null)
+            throw new Exception("Hotel not found");
+
+        return await GetHotelFullInternalAsync(hotel.BranchCode, checkIn, checkOut, adultCount, childCount, cancellationToken);
+    }
+
+    private async Task<HotelFullPublicDto> GetHotelFullInternalAsync(
+        string branchCode,
+        DateTime checkIn,
+        DateTime checkOut,
+        int adultCount,
+        int childCount,
+        CancellationToken cancellationToken)
+    {
         var checkInDate = DateTime.SpecifyKind(checkIn.Date, DateTimeKind.Utc);
         var checkOutDate = DateTime.SpecifyKind(checkOut.Date, DateTimeKind.Utc);
 

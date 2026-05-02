@@ -51,6 +51,18 @@ export type HotelRow = {
   nearbyPlaces: { id: string; name: string; distance: string }[];
 };
 
+export type RatePlanAdminRow = {
+  id: string;
+  roomTypeId: string;
+  name: string;
+  price: number;
+  includesBreakfast: boolean;
+  isRefundable: boolean;
+  paymentType: string;
+  termsConditions: string;
+  isActive: boolean;
+};
+
 export type BannerRow = {
   id: string;
   title: string;
@@ -246,4 +258,23 @@ export async function uploadImage(file: File, folder: string) {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data;
+}
+
+export async function getRatePlansByRoomType(roomTypeId: string) {
+  const { data } = await adminApi.get<RatePlanAdminRow[]>(`/api/admin/room-types/${roomTypeId}/rate-plans`);
+  return data;
+}
+
+export async function createRatePlan(roomTypeId: string, payload: Omit<RatePlanAdminRow, "id" | "roomTypeId">) {
+  const { data } = await adminApi.post<RatePlanAdminRow>(`/api/admin/room-types/${roomTypeId}/rate-plans`, payload);
+  return data;
+}
+
+export async function updateRatePlan(id: string, payload: Omit<RatePlanAdminRow, "id" | "roomTypeId">) {
+  const { data } = await adminApi.put<RatePlanAdminRow>(`/api/admin/rate-plans/${id}`, payload);
+  return data;
+}
+
+export async function deleteRatePlan(id: string) {
+  await adminApi.delete(`/api/admin/rate-plans/${id}`);
 }

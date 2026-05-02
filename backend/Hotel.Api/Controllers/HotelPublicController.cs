@@ -40,4 +40,31 @@ public class HotelPublicController : ControllerBase
             return BadRequest(new { error = ex.Message });
         }
     }
+
+    [HttpGet("slug/{slug}/full")]
+    public async Task<IActionResult> GetHotelFullBySlug(
+        string slug,
+        [FromQuery] DateTime checkIn,
+        [FromQuery] DateTime checkOut,
+        [FromQuery] int adult = 1,
+        [FromQuery] int child = 0,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var hotel = await _hotelPublicService.GetHotelFullBySlugAsync(
+                slug,
+                checkIn,
+                checkOut,
+                adult,
+                child,
+                cancellationToken);
+
+            return Ok(hotel);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
 }

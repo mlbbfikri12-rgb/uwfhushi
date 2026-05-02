@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Hotel.Api.Controllers;
 
 [ApiController]
+[Route("api/public/banners")]
 [Route("api/banners")]
 public class BannersController : ControllerBase
 {
@@ -14,8 +15,15 @@ public class BannersController : ControllerBase
         _bannerService = bannerService;
     }
 
-    [HttpGet("active")]
+    [HttpGet]
     public async Task<IActionResult> GetActive(CancellationToken cancellationToken)
+    {
+        var banners = await _bannerService.GetActiveBannersAsync(cancellationToken);
+        return Ok(banners);
+    }
+
+    [HttpGet("active")]
+    public async Task<IActionResult> GetActiveLegacy(CancellationToken cancellationToken)
     {
         var banners = await _bannerService.GetActiveBannersAsync(cancellationToken);
         return Ok(banners);

@@ -485,6 +485,38 @@ POST   /api/admin/hotels/{id}/nearby-places
 DELETE /api/admin/hotels/{id}/nearby-places/{nearbyPlaceId}
 ```
 
+Rate plan management (tenant, SPV/SUPER_ADMIN):
+
+```http
+GET    /api/admin/room-types/{roomTypeId}/rate-plans
+POST   /api/admin/room-types/{roomTypeId}/rate-plans
+PUT    /api/admin/rate-plans/{id}
+DELETE /api/admin/rate-plans/{id}
+```
+
+Banner system:
+
+```http
+GET    /api/public/banners
+GET    /api/admin/banners
+POST   /api/admin/banners
+PUT    /api/admin/banners/{id}
+DELETE /api/admin/banners/{id}
+```
+
+Public home aggregate:
+
+```http
+GET /api/public/home
+GET /api/public/blogs
+```
+
+Hotel detail slug route:
+
+```http
+GET /api/hotel/slug/{slug}/full
+```
+
 Validasi utama hotel:
 
 - `CityId` harus valid

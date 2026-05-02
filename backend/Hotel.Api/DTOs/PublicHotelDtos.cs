@@ -23,6 +23,7 @@ public class PublicHotelSearchResponseDto
 public class PublicHotelListItemDto
 {
     public Guid HotelId { get; set; }
+    public string Slug { get; set; } = string.Empty;
     public string BranchCode { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string City { get; set; } = string.Empty;

@@ -2,13 +2,13 @@ import { publicApi } from "@/lib/public-api";
 import type { HotelFullResponse } from "@/types/hotel";
 
 export async function getHotelFull(params: {
-  branch: string;
+  slug: string;
   checkIn: string;
   checkOut: string;
   adult: number;
   child: number;
 }) {
-  const { data } = await publicApi.get<HotelFullResponse>(`/api/hotel/${params.branch}/full`, {
+  const { data } = await publicApi.get<HotelFullResponse>(`/api/hotel/slug/${params.slug}/full`, {
     params: {
       checkIn: params.checkIn,
       checkOut: params.checkOut,

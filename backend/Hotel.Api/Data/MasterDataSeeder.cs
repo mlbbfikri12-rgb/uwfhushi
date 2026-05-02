@@ -21,6 +21,9 @@ public static class MasterDataSeeder
         await EnsureHotelAsync(db, "Hotel Jakarta", "hotel-jakarta", "JKT", cityJakarta.Id, brandAmaris.Id, "Jakarta CBD");
         await EnsureHotelAsync(db, "Hotel Bali", "hotel-bali", "BLI", cityBali.Id, brandSantika.Id, "Bali Beach Area");
 
+        await EnsureBlogAsync(db, "Best Weekend Staycation Tips", "Book smart for your weekend getaway.");
+        await EnsureBlogAsync(db, "Top Hotel Facilities for Family", "Choose hotel with kid-friendly amenities.");
+
         await db.SaveChangesAsync();
     }
 
@@ -107,5 +110,25 @@ public static class MasterDataSeeder
         hotel.BrandId = brandId;
         hotel.Address = address;
         hotel.IsActive = true;
+    }
+
+    private static async Task EnsureBlogAsync(MasterDbContext db, string title, string content)
+    {
+        var blog = await db.BlogPosts.FirstOrDefaultAsync(x => x.Title == title);
+        if (blog != null)
+        {
+            blog.IsActive = true;
+            return;
+        }
+
+        db.BlogPosts.Add(new BlogPost
+        {
+            Id = Guid.NewGuid(),
+            Title = title,
+            Content = content,
+            ImageUrl = "https://images.unsplash.com/photo-1520250497591-112f2f40a3f4?w=1200&q=80",
+            CreatedAt = DateTime.UtcNow,
+            IsActive = true
+        });
     }
 }

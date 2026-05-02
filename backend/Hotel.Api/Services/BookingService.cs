@@ -40,6 +40,24 @@ public interface IBookingService
         CheckoutOrderDto dto);
 }
 
+public class NoopDistributedLockService : IDistributedLockService
+{
+    public Task<string?> AcquireAsync(string key, TimeSpan expiry)
+        => Task.FromResult<string?>("noop");
+
+    public Task ReleaseAsync(string key, string lockToken)
+        => Task.CompletedTask;
+}
+
+public class NoopEmailQueue : IEmailQueue
+{
+    public void Enqueue(Func<CancellationToken, Task> job)
+    {
+        // langsung execute (biar test tetap jalan)
+        _ = job(CancellationToken.None);
+    }
+}
+
 
 
 public class BookingService : IBookingService
@@ -51,8 +69,12 @@ public class BookingService : IBookingService
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly BookingValidationSettings _validationSettings;
     private readonly ILogger<BookingService> _logger;
+    private readonly IEmailQueue _emailQueue;
+
+    private readonly IDistributedLockService _lockService;
     private readonly bool _skipBranchValidation;
 
+    // 🔹 1. TEST / FALLBACK CONSTRUCTOR
     public BookingService(AppDbContext db, MasterDbContext masterDb)
         : this(
             db,
@@ -62,10 +84,13 @@ public class BookingService : IBookingService
             new HttpContextAccessor(),
             Options.Create(new BookingValidationSettings()),
             NullLogger<BookingService>.Instance,
+            new NoopDistributedLockService(),
+            new NoopEmailQueue(),
             skipBranchValidation: true)
     {
     }
 
+    // 🔹 2. PRODUCTION CONSTRUCTOR (DI)
     public BookingService(
         AppDbContext db,
         MasterDbContext masterDb,
@@ -73,11 +98,24 @@ public class BookingService : IBookingService
         IBookingEmailService bookingEmailService,
         IHttpContextAccessor httpContextAccessor,
         IOptions<BookingValidationSettings> validationSettings,
-        ILogger<BookingService> logger)
-        : this(db, masterDb, cache, bookingEmailService, httpContextAccessor, validationSettings, logger, skipBranchValidation: false)
+        ILogger<BookingService> logger,
+        IDistributedLockService lockService,
+        IEmailQueue emailQueue) // ✅ TAMBAH
+        : this(
+            db,
+            masterDb,
+            cache,
+            bookingEmailService,
+            httpContextAccessor,
+            validationSettings,
+            logger,
+            lockService,
+            emailQueue,
+            skipBranchValidation: false)
     {
     }
 
+    // 🔹 3. INTERNAL CONSTRUCTOR (SOURCE OF TRUTH)
     private BookingService(
         AppDbContext db,
         MasterDbContext masterDb,
@@ -86,6 +124,8 @@ public class BookingService : IBookingService
         IHttpContextAccessor httpContextAccessor,
         IOptions<BookingValidationSettings> validationSettings,
         ILogger<BookingService> logger,
+        IDistributedLockService lockService,
+        IEmailQueue emailQueue, // ✅ WAJIB ADA DI SINI
         bool skipBranchValidation)
     {
         _db = db;
@@ -95,9 +135,10 @@ public class BookingService : IBookingService
         _httpContextAccessor = httpContextAccessor;
         _validationSettings = validationSettings.Value;
         _logger = logger;
+        _lockService = lockService ?? throw new ArgumentNullException(nameof(lockService));
+        _emailQueue = emailQueue ?? throw new ArgumentNullException(nameof(emailQueue));
         _skipBranchValidation = skipBranchValidation;
     }
-
     public async Task<Booking> CreateBookingAsync(
         Guid roomId,
         string customerName,
@@ -197,111 +238,203 @@ public class BookingService : IBookingService
         {
             var resultItems = new List<CheckoutBookingItemDto>();
 
+            // 🔥 1. PRELOAD semua RoomTypeId
+            var roomTypeIds = draft.Items
+                .Select(i => i.RoomTypeId)
+                .Distinct()
+                .ToList();
+
+            // 🔥 2. LOAD semua rooms SEKALI
+            var allRooms = await _db.Rooms
+                .Where(r =>
+                    roomTypeIds.Contains(r.RoomTypeId) &&
+                    r.Status == "available")
+                .Select(r => new
+                {
+                    r.Id,
+                    r.RoomTypeId,
+                    r.RoomNumber,
+                    RoomTypeName = r.RoomType.Name,
+                    r.RoomType.MaxAdults,
+                    r.RoomType.MaxChildren
+                })
+                .ToListAsync();
+
+            // 🔥 3. GROUP di memory
+            var roomsByType = allRooms
+                .GroupBy(r => r.RoomTypeId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            // 🔥 TAMBAH DI SINI (SEBELUM LOOP)
+
+            var allRoomIds = allRooms.Select(r => r.Id).ToList();
+
+            var allDates = draft.Items
+                .SelectMany(i =>
+                    Enumerable.Range(0, (i.CheckOut.Date - i.CheckIn.Date).Days)
+                        .Select(d => i.CheckIn.Date.AddDays(d)))
+                .Distinct()
+                .ToList();
+
+            var allAvailabilities = await _db.RoomAvailabilities
+                .Where(a =>
+                    allRoomIds.Contains(a.RoomId) &&
+                    allDates.Contains(a.Date))
+                .ToListAsync();
+
+            var availabilityLookup = allAvailabilities
+                .GroupBy(a => a.RoomId)
+                .ToDictionary(g => g.Key, g => g.ToDictionary(x => x.Date));
+
             foreach (var item in draft.Items.OrderBy(i => i.CreatedAt))
             {
                 var checkInDate = DateTime.SpecifyKind(item.CheckIn.Date, DateTimeKind.Utc);
                 var checkOutDate = DateTime.SpecifyKind(item.CheckOut.Date, DateTimeKind.Utc);
 
-                ValidateBookingRequest(checkInDate, checkOutDate, globalCustomer.Email, dto.AdultCount, dto.ChildCount, isAuthenticated: true);
+                // 🔥 REDIS LOCK (WAJIB DI SINI)
+                var lockKey = $"lock:rt:{item.RoomTypeId}:{checkInDate:yyyyMMdd}:{checkOutDate:yyyyMMdd}";
+                var lockToken = await _lockService.AcquireAsync(lockKey, TimeSpan.FromMinutes(2));
 
-                var nights = (checkOutDate - checkInDate).Days;
-                var dates = Enumerable.Range(0, nights)
-                    .Select(offset => checkInDate.AddDays(offset))
-                    .ToList();
+                if (lockToken == null)
+                    throw new Exception("High demand, please try again");
 
-                var candidateRooms = await _db.Rooms
-                    .Where(r =>
-                        r.RoomTypeId == item.RoomTypeId &&
-                        r.Status == "available" &&
-                        dto.AdultCount <= r.RoomType.MaxAdults &&
-                        dto.ChildCount <= r.RoomType.MaxChildren)
-                    .Select(r => new { r.Id, r.RoomNumber, RoomTypeName = r.RoomType.Name })
-                    .ToListAsync();
-
-                if (candidateRooms.Count < item.TotalRooms)
-                    throw new Exception("Room not available");
-
-                var candidateRoomIds = candidateRooms.Select(r => r.Id).ToList();
-                var unavailableRoomIds = await _db.RoomAvailabilities
-                    .Where(a => candidateRoomIds.Contains(a.RoomId) && dates.Contains(a.Date) && !a.IsAvailable)
-                    .Select(a => a.RoomId)
-                    .Distinct()
-                    .ToListAsync();
-
-                var selectedRooms = candidateRooms
-                    .Where(r => !unavailableRoomIds.Contains(r.Id))
-                    .Take(item.TotalRooms)
-                    .ToList();
-
-                if (selectedRooms.Count < item.TotalRooms)
-                    throw new Exception("Room not available");
-
-                foreach (var selectedRoom in selectedRooms)
+                try
                 {
-                    var basePrice = item.PricePerNight * nights;
-                    var tax = Math.Round(basePrice * 0.11m, 2);
-                    var totalPrice = basePrice + tax;
+                    ValidateBookingRequest(
+                        checkInDate,
+                        checkOutDate,
+                        globalCustomer.Email,
+                        dto.AdultCount,
+                        dto.ChildCount,
+                        isAuthenticated: true);
 
-                    var booking = new Booking
+                    var nights = (checkOutDate - checkInDate).Days;
+
+                    var dates = Enumerable.Range(0, nights)
+                        .Select(offset => checkInDate.AddDays(offset))
+                        .ToList();
+
+                    if (!roomsByType.TryGetValue(item.RoomTypeId, out var candidateRooms))
+                        throw new InvalidOperationException("Room not available");
+
+                    candidateRooms = candidateRooms
+                        .Where(r =>
+                            dto.AdultCount <= r.MaxAdults &&
+                            dto.ChildCount <= r.MaxChildren)
+                        .ToList();
+
+                    if (candidateRooms.Count < item.TotalRooms)
+                        throw new InvalidOperationException("Room not available");
+
+                    var candidateRoomIds = candidateRooms.Select(r => r.Id).ToList();
+
+                    var unavailableRoomIds = new HashSet<Guid>();
+
+                    foreach (var roomId in candidateRoomIds)
                     {
-                        Id = Guid.NewGuid(),
-                        RoomId = selectedRoom.Id,
-                        CustomerId = customer.Id,
-                        CheckIn = checkInDate,
-                        CheckOut = checkOutDate,
-                        AdultCount = dto.AdultCount,
-                        ChildCount = dto.ChildCount,
-                        BasePrice = basePrice,
-                        Tax = tax,
-                        TotalPrice = totalPrice,
-                        BookingCode = await GenerateBookingCodeAsync(),
-                        Status = "pending",
-                        PaymentMethod = dto.PaymentMethod ?? item.RatePlan?.PaymentType,
-                        PaymentStatus = "pending",
-                        Notes = dto.Notes,
-                        CreatedAt = DateTime.UtcNow
-                    };
+                        if (!availabilityLookup.TryGetValue(roomId, out var roomDates))
+                            continue;
 
-                    _db.Bookings.Add(booking);
-
-                    var existingAvailabilities = await _db.RoomAvailabilities
-                        .Where(a => a.RoomId == selectedRoom.Id && dates.Contains(a.Date))
-                        .ToDictionaryAsync(a => a.Date);
-
-                    foreach (var date in dates)
-                    {
-                        if (existingAvailabilities.TryGetValue(date, out var availability))
+                        foreach (var date in dates)
                         {
-                            availability.IsAvailable = false;
-                        }
-                        else
-                        {
-                            _db.RoomAvailabilities.Add(new RoomAvailability
+                            if (roomDates.TryGetValue(date, out var a) && !a.IsAvailable)
                             {
-                                Id = Guid.NewGuid(),
-                                RoomId = selectedRoom.Id,
-                                Date = date,
-                                IsAvailable = false,
-                                CreatedAt = DateTime.UtcNow
-                            });
+                                unavailableRoomIds.Add(roomId);
+                                break;
+                            }
                         }
                     }
 
-                    resultItems.Add(new CheckoutBookingItemDto
+                    var selectedRooms = candidateRooms
+                        .Where(r => !unavailableRoomIds.Contains(r.Id))
+                        .Take(item.TotalRooms)
+                        .ToList();
+
+                    if (selectedRooms.Count < item.TotalRooms)
+                        throw new InvalidOperationException("Room not available");
+
+                    foreach (var selectedRoom in selectedRooms)
                     {
-                        BookingId = booking.Id,
-                        BookingCode = booking.BookingCode,
-                        RoomId = selectedRoom.Id,
-                        RoomNumber = selectedRoom.RoomNumber,
-                        RoomTypeName = selectedRoom.RoomTypeName,
-                        RatePlanName = item.RatePlan?.Name ?? string.Empty,
-                        CheckIn = checkInDate,
-                        CheckOut = checkOutDate,
-                        TotalPrice = totalPrice
-                    });
+                        var basePrice = item.PricePerNight * nights;
+                        var tax = Math.Round(basePrice * 0.11m, 2);
+                        var totalPrice = basePrice + tax;
+
+                        var booking = new Booking
+                        {
+                            Id = Guid.NewGuid(),
+                            RoomId = selectedRoom.Id,
+                            CustomerId = customer.Id,
+                            CheckIn = checkInDate,
+                            CheckOut = checkOutDate,
+                            AdultCount = dto.AdultCount,
+                            ChildCount = dto.ChildCount,
+                            BasePrice = basePrice,
+                            Tax = tax,
+                            TotalPrice = totalPrice,
+                            BookingCode = await GenerateBookingCodeAsync(),
+                            Status = "pending",
+                            PaymentMethod = dto.PaymentMethod ?? item.RatePlan?.PaymentType,
+                            PaymentStatus = "pending",
+                            Notes = dto.Notes,
+                            CreatedAt = DateTime.UtcNow
+                        };
+
+                        _db.Bookings.Add(booking);
+
+                        if (!availabilityLookup.TryGetValue(selectedRoom.Id, out var existingAvailabilities))
+                        {
+                            existingAvailabilities = new Dictionary<DateTime, RoomAvailability>();
+                            availabilityLookup[selectedRoom.Id] = existingAvailabilities;
+                        }
+
+                        foreach (var date in dates)
+                        {
+                            if (existingAvailabilities.TryGetValue(date, out var availability))
+                            {
+                                availability.IsAvailable = false;
+                                existingAvailabilities[date] = availability;
+                            }
+                            else
+                            {
+                                var newAvailability = new RoomAvailability
+                                {
+                                    Id = Guid.NewGuid(),
+                                    RoomId = selectedRoom.Id,
+                                    Date = date,
+                                    IsAvailable = false,
+                                    CreatedAt = DateTime.UtcNow
+                                };
+
+                                _db.RoomAvailabilities.Add(newAvailability);
+
+                                // 🔥 FIX: inject ke dictionary biar next iteration aware
+                                if (!availabilityLookup.ContainsKey(selectedRoom.Id))
+                                    availabilityLookup[selectedRoom.Id] = new Dictionary<DateTime, RoomAvailability>();
+
+                                availabilityLookup[selectedRoom.Id][date] = newAvailability;
+                            }
+                        }
+
+                        resultItems.Add(new CheckoutBookingItemDto
+                        {
+                            BookingId = booking.Id,
+                            BookingCode = booking.BookingCode,
+                            RoomId = selectedRoom.Id,
+                            RoomNumber = selectedRoom.RoomNumber,
+                            RoomTypeName = selectedRoom.RoomTypeName,
+                            RatePlanName = item.RatePlan?.Name ?? string.Empty,
+                            CheckIn = checkInDate,
+                            CheckOut = checkOutDate,
+                            TotalPrice = totalPrice
+                        });
+                    }
+                }
+                finally
+                {
+                    // 🔥 WAJIB RELEASE
+                    await _lockService.ReleaseAsync(lockKey, lockToken);
                 }
             }
-
             draft.Status = "checked_out";
             draft.UpdatedAt = DateTime.UtcNow;
 
@@ -311,6 +444,7 @@ public class BookingService : IBookingService
             await InvalidateBookingRelatedCachesAsync(branchCode);
 
             var bookingIds = resultItems.Select(i => i.BookingId).ToList();
+
             var loadedBookings = await _db.Bookings
                 .AsNoTracking()
                 .Include(b => b.Customer)
@@ -323,11 +457,12 @@ public class BookingService : IBookingService
             {
                 try
                 {
-                    await _bookingEmailService.SendBookingCreatedAsync(loadedBooking, branchName);
+                    _emailQueue.Enqueue(ct =>
+    _bookingEmailService.SendBookingCreatedAsync(loadedBooking, branchName, ct));
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Booking email failed after checkout from order. BookingId={BookingId}", loadedBooking.Id);
+                    _logger.LogError(ex, "Booking email failed. BookingId={BookingId}", loadedBooking.Id);
                 }
             }
 
@@ -479,12 +614,16 @@ public class BookingService : IBookingService
                 .Select(offset => checkInDate.AddDays(offset))
                 .ToList();
 
+            // 🔥 LOCK DULU
+            await LockRoomAvailabilityAsync(roomId, dates);
+
+            // 🔥 BARU CEK
             var unavailable = await _db.RoomAvailabilities
                 .Where(a => a.RoomId == roomId && dates.Contains(a.Date) && !a.IsAvailable)
                 .AnyAsync();
 
             if (unavailable)
-                throw new Exception("Room not available");
+                throw new InvalidOperationException("Room not available");
 
             var room = await _db.Rooms
                 .Include(r => r.RoomType)
@@ -566,7 +705,8 @@ public class BookingService : IBookingService
             {
                 try
                 {
-                    await _bookingEmailService.SendBookingCreatedAsync(loadedBooking, branchName);
+                    _emailQueue.Enqueue(ct =>
+    _bookingEmailService.SendBookingCreatedAsync(loadedBooking, branchName, ct));
                 }
                 catch (Exception ex)
                 {
@@ -693,5 +833,15 @@ public class BookingService : IBookingService
     {
         await _cache.RemoveByPrefixAsync($"availability:{branchCode}:");
         await _cache.RemoveByPrefixAsync($"hotel:full:{branchCode}:");
+    }
+
+    private async Task LockRoomAvailabilityAsync(Guid roomId, List<DateTime> dates)
+    {
+        await _db.Database.ExecuteSqlRawAsync(@"
+        SELECT 1 FROM ""RoomAvailabilities""
+        WHERE ""RoomId"" = {0}
+        AND ""Date"" = ANY({1})
+        FOR UPDATE SKIP LOCKED
+    ", roomId, dates.ToArray());
     }
 }

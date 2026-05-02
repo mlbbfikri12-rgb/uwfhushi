@@ -118,6 +118,7 @@ public class PublicHotelSearchService : IPublicHotelSearchService
             list.Add(new PublicHotelListItemDto
             {
                 HotelId = hotel.Id,
+                Slug = hotel.Slug,
                 BranchCode = hotel.BranchCode,
                 Name = hotel.Name,
                 City = hotel.City?.Name ?? string.Empty,

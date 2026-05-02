@@ -20,6 +20,7 @@ public class MasterDbContext : DbContext
     public DbSet<Facility> Facilities => Set<Facility>();
     public DbSet<HotelFacility> HotelFacilities => Set<HotelFacility>();
     public DbSet<NearbyPlace> NearbyPlaces => Set<NearbyPlace>();
+    public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -64,6 +65,8 @@ public class MasterDbContext : DbContext
         modelBuilder.Entity<Facility>()
             .HasIndex(f => f.Name)
             .IsUnique();
+        modelBuilder.Entity<BlogPost>()
+            .HasIndex(b => new { b.IsActive, b.CreatedAt });
 
         modelBuilder.Entity<HotelFacility>()
             .HasKey(hf => new { hf.HotelId, hf.FacilityId });

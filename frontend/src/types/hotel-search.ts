@@ -1,5 +1,6 @@
 export type PublicHotelListItem = {
   hotelId: string;
+  slug: string;
   branchCode: string;
   name: string;
   city: string;

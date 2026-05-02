@@ -118,20 +118,32 @@ builder.Services.AddScoped<IBranchProvisioningService, BranchProvisioningService
 builder.Services.AddScoped<IStaffAdminService, StaffAdminService>();
 builder.Services.AddScoped<IRoomManagementService, RoomManagementService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
+builder.Services.AddScoped<IRatePlanAdminService, RatePlanAdminService>();
 builder.Services.AddScoped<ICacheService, RedisCacheService>();
 builder.Services.AddScoped<IPublicBranchService, PublicBranchService>();
 builder.Services.AddScoped<IPublicHotelSearchService, PublicHotelSearchService>();
 builder.Services.AddScoped<IHotelPublicService, HotelPublicService>();
+builder.Services.AddScoped<IPublicHomeService, PublicHomeService>();
 builder.Services.AddScoped<ICityService, CityService>();
 builder.Services.AddScoped<IBrandService, BrandService>();
 builder.Services.AddScoped<IFacilityService, FacilityService>();
 builder.Services.AddScoped<IHotelAdminService, HotelAdminService>();
 builder.Services.AddScoped<IBannerService, BannerService>();
+builder.Services.AddSingleton<EmailQueue>();
+builder.Services.AddSingleton<IEmailQueue>(sp => sp.GetRequiredService<EmailQueue>());
+builder.Services.AddHostedService<EmailBackgroundService>();
+builder.Services.AddSingleton<IDistributedLockService, RedisDistributedLockService>();
 builder.Services.AddScoped<IBookingEmailService, BookingEmailService>();
 builder.Services.AddScoped<ITenantSeedService, TenantSeedService>();
 builder.Services.AddHttpClient<IObjectStorageService, ObjectStorageService>();
 
-builder.Services.AddDbContext<MasterDbContext>(options =>
+builder.Services.AddDbContextPool<MasterDbContext>(options =>
+{
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Master"));
+});
+
+// 🔥 factory hanya untuk service tertentu (search)
+builder.Services.AddPooledDbContextFactory<MasterDbContext>(options =>
 {
     options.UseNpgsql(builder.Configuration.GetConnectionString("Master"));
 });

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import * as Icons from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 type Props = {
   value: string;
@@ -22,9 +23,7 @@ export function IconAutocomplete({ value, onChange, placeholder }: Props) {
       .slice(0, 20);
   }, [value, iconEntries]);
 
-  const SelectedIcon = Icons[
-    value as keyof typeof Icons
-  ] as React.ComponentType<any>;
+  const SelectedIcon = Icons[value as keyof typeof Icons] as LucideIcon | undefined;
 
   return (
     <div className="relative w-full">
@@ -58,7 +57,7 @@ export function IconAutocomplete({ value, onChange, placeholder }: Props) {
           )}
 
           {filtered.map(([name, Icon]) => {
-            const Comp = Icon as React.ComponentType<any>;
+            const Comp = Icon as LucideIcon;
 
             return (
               <button

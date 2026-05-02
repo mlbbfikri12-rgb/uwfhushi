@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import * as Icons from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import { AdminLayout } from "@/components/admin/layout/AdminLayout";
 import {
@@ -18,7 +19,7 @@ import { IconAutocomplete } from "@/utils/AutoCompleteIcon";
 function getIconComponent(name: string) {
   if (!name) return null;
 
-  return Icons[name as keyof typeof Icons] as React.ComponentType<any>;
+  return Icons[name as keyof typeof Icons] as LucideIcon | null;
 }
 
 export default function AdminMasterFacilitiesPage() {
@@ -63,8 +64,6 @@ export default function AdminMasterFacilitiesPage() {
   });
 
   if (!staffQuery.data) return null;
-
-  const CreateIcon = getIconComponent(icon);
 
   return (
     <AdminLayout role={staffQuery.data.role}>
@@ -121,8 +120,6 @@ export default function AdminMasterFacilitiesPage() {
               const TableIcon = getIconComponent(facility.icon || "");
 
               if (editingId === facility.id) {
-                const EditIconPreview = getIconComponent(editIcon);
-
                 return (
                   <tr
                     key={facility.id}
