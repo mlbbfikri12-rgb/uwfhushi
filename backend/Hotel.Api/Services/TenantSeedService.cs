@@ -7,38 +7,43 @@ namespace Hotel.Api.Services;
 
 public interface ITenantSeedService
 {
-    Task SeedOtaDummyDataAsync(CancellationToken cancellationToken = default);
+    Task SeedOtaDummyDataAsync(string branchCode, CancellationToken cancellationToken = default);
 }
 
 public class TenantSeedService : ITenantSeedService
 {
-    private readonly AppDbContext _tenantDb;
+    private readonly ITenantDbFactory _tenantDbFactory;
     private readonly MasterDbContext _masterDb;
     private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public TenantSeedService(AppDbContext tenantDb, MasterDbContext masterDb, IHttpContextAccessor httpContextAccessor)
+    public TenantSeedService(
+        ITenantDbFactory tenantDbFactory,
+        MasterDbContext masterDb,
+        IHttpContextAccessor httpContextAccessor)
     {
-        _tenantDb = tenantDb;
+        _tenantDbFactory = tenantDbFactory;
         _masterDb = masterDb;
         _httpContextAccessor = httpContextAccessor;
     }
 
-    public async Task SeedOtaDummyDataAsync(CancellationToken cancellationToken = default)
+    public async Task SeedOtaDummyDataAsync(string branchCode, CancellationToken cancellationToken = default)
     {
+        await using var db = await _tenantDbFactory.CreateAsync(branchCode, cancellationToken);
+
         var now = DateTime.UtcNow;
 
-        var roomTypes = await EnsureRoomTypesAsync(now, cancellationToken);
-        await EnsureRatePlansAsync(roomTypes, cancellationToken);
-        await EnsureRoomTypeFacilitiesAsync(roomTypes, cancellationToken);
-        await EnsureRoomsAsync(roomTypes, now, cancellationToken);
-        await EnsureRoomAvailabilitiesAsync(now, cancellationToken);
+        var roomTypes = await EnsureRoomTypesAsync(db, now, cancellationToken);
+        await EnsureRatePlansAsync(db, roomTypes, cancellationToken);
+        await EnsureRoomTypeFacilitiesAsync(db, roomTypes, cancellationToken);
+        await EnsureRoomsAsync(db, roomTypes, now, cancellationToken);
+        await EnsureRoomAvailabilitiesAsync(db, now, cancellationToken);
         await EnsureMasterNearbyPlacesAsync(cancellationToken);
 
-        await _tenantDb.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
         await _masterDb.SaveChangesAsync(cancellationToken);
     }
 
-    private async Task<Dictionary<string, RoomType>> EnsureRoomTypesAsync(DateTime now, CancellationToken cancellationToken)
+    private async Task<Dictionary<string, RoomType>> EnsureRoomTypesAsync(AppDbContext db, DateTime now, CancellationToken cancellationToken)
     {
         var seeds = new[]
         {
@@ -88,10 +93,10 @@ public class TenantSeedService : ITenantSeedService
 
         foreach (var seed in seeds)
         {
-            var existing = await _tenantDb.RoomTypes.FirstOrDefaultAsync(rt => rt.Name == seed.Name, cancellationToken);
+            var existing = await db.RoomTypes.FirstOrDefaultAsync(rt => rt.Name == seed.Name, cancellationToken);
             if (existing == null)
             {
-                _tenantDb.RoomTypes.Add(seed);
+                db.RoomTypes.Add(seed);
             }
             else
             {
@@ -106,21 +111,22 @@ public class TenantSeedService : ITenantSeedService
             }
         }
 
-        await _tenantDb.SaveChangesAsync(cancellationToken);
-        return await _tenantDb.RoomTypes.ToDictionaryAsync(rt => rt.Name, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return await db.RoomTypes.ToDictionaryAsync(rt => rt.Name, StringComparer.OrdinalIgnoreCase, cancellationToken);
     }
 
-    private async Task EnsureRatePlansAsync(Dictionary<string, RoomType> roomTypes, CancellationToken cancellationToken)
+    private async Task EnsureRatePlansAsync(AppDbContext db, Dictionary<string, RoomType> roomTypes, CancellationToken cancellationToken)
     {
         foreach (var roomType in roomTypes.Values)
         {
-            await EnsureRatePlanAsync(roomType, $"{roomType.Name} - Flexible Breakfast", roomType.BasePrice, true, true, "online", "Free cancellation H-2.", cancellationToken);
-            await EnsureRatePlanAsync(roomType, $"{roomType.Name} - Saver Non Refundable", Math.Round(roomType.BasePrice * 0.9m, 0), false, false, "online", "Non refundable booking.", cancellationToken);
-            await EnsureRatePlanAsync(roomType, $"{roomType.Name} - Pay at Hotel", Math.Round(roomType.BasePrice * 1.05m, 0), true, true, "pay_at_hotel", "Payment at hotel check-in.", cancellationToken);
+            await EnsureRatePlanAsync(db, roomType, $"{roomType.Name} - Flexible Breakfast", roomType.BasePrice, true, true, "online", "Free cancellation H-2.", cancellationToken);
+            await EnsureRatePlanAsync(db, roomType, $"{roomType.Name} - Saver Non Refundable", Math.Round(roomType.BasePrice * 0.9m, 0), false, false, "online", "Non refundable booking.", cancellationToken);
+            await EnsureRatePlanAsync(db, roomType, $"{roomType.Name} - Pay at Hotel", Math.Round(roomType.BasePrice * 1.05m, 0), true, true, "pay_at_hotel", "Payment at hotel check-in.", cancellationToken);
         }
     }
 
     private async Task EnsureRatePlanAsync(
+        AppDbContext db,
         RoomType roomType,
         string name,
         decimal price,
@@ -130,10 +136,10 @@ public class TenantSeedService : ITenantSeedService
         string terms,
         CancellationToken cancellationToken)
     {
-        var existing = await _tenantDb.RatePlans.FirstOrDefaultAsync(rp => rp.RoomTypeId == roomType.Id && rp.Name == name, cancellationToken);
+        var existing = await db.RatePlans.FirstOrDefaultAsync(rp => rp.RoomTypeId == roomType.Id && rp.Name == name, cancellationToken);
         if (existing == null)
         {
-            _tenantDb.RatePlans.Add(new RatePlan
+            db.RatePlans.Add(new RatePlan
             {
                 Id = Guid.NewGuid(),
                 RoomTypeId = roomType.Id,
@@ -156,7 +162,7 @@ public class TenantSeedService : ITenantSeedService
         existing.IsActive = true;
     }
 
-    private async Task EnsureRoomTypeFacilitiesAsync(Dictionary<string, RoomType> roomTypes, CancellationToken cancellationToken)
+    private async Task EnsureRoomTypeFacilitiesAsync(AppDbContext db, Dictionary<string, RoomType> roomTypes, CancellationToken cancellationToken)
     {
         var facilitySeeds = new Dictionary<string, string[]>
         {
@@ -172,11 +178,11 @@ public class TenantSeedService : ITenantSeedService
 
             foreach (var facilityName in pair.Value)
             {
-                var exists = await _tenantDb.RoomTypeFacilities
+                var exists = await db.RoomTypeFacilities
                     .AnyAsync(f => f.RoomTypeId == roomType.Id && f.Name == facilityName, cancellationToken);
                 if (!exists)
                 {
-                    _tenantDb.RoomTypeFacilities.Add(new RoomTypeFacility
+                    db.RoomTypeFacilities.Add(new RoomTypeFacility
                     {
                         Id = Guid.NewGuid(),
                         RoomTypeId = roomType.Id,
@@ -187,7 +193,7 @@ public class TenantSeedService : ITenantSeedService
         }
     }
 
-    private async Task EnsureRoomsAsync(Dictionary<string, RoomType> roomTypes, DateTime now, CancellationToken cancellationToken)
+    private async Task EnsureRoomsAsync(AppDbContext db, Dictionary<string, RoomType> roomTypes, DateTime now, CancellationToken cancellationToken)
     {
         var roomSeeds = new[]
         {
@@ -203,10 +209,10 @@ public class TenantSeedService : ITenantSeedService
             if (!roomTypes.TryGetValue(roomTypeName, out var roomType))
                 continue;
 
-            var exists = await _tenantDb.Rooms.AnyAsync(r => r.RoomNumber == roomNumber, cancellationToken);
+            var exists = await db.Rooms.AnyAsync(r => r.RoomNumber == roomNumber, cancellationToken);
             if (!exists)
             {
-                _tenantDb.Rooms.Add(new Room
+                db.Rooms.Add(new Room
                 {
                     Id = Guid.NewGuid(),
                     RoomNumber = roomNumber,
@@ -218,18 +224,18 @@ public class TenantSeedService : ITenantSeedService
         }
     }
 
-    private async Task EnsureRoomAvailabilitiesAsync(DateTime now, CancellationToken cancellationToken)
+    private async Task EnsureRoomAvailabilitiesAsync(AppDbContext db, DateTime now, CancellationToken cancellationToken)
     {
-        var roomIds = await _tenantDb.Rooms.Select(r => r.Id).ToListAsync(cancellationToken);
+        var roomIds = await db.Rooms.Select(r => r.Id).ToListAsync(cancellationToken);
         foreach (var roomId in roomIds)
         {
             for (var day = 0; day < 90; day++)
             {
                 var date = now.Date.AddDays(day);
-                var exists = await _tenantDb.RoomAvailabilities.AnyAsync(a => a.RoomId == roomId && a.Date == date, cancellationToken);
+                var exists = await db.RoomAvailabilities.AnyAsync(a => a.RoomId == roomId && a.Date == date, cancellationToken);
                 if (!exists)
                 {
-                    _tenantDb.RoomAvailabilities.Add(new RoomAvailability
+                    db.RoomAvailabilities.Add(new RoomAvailability
                     {
                         Id = Guid.NewGuid(),
                         RoomId = roomId,

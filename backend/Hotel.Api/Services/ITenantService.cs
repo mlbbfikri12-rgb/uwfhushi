@@ -1,4 +1,4 @@
 public interface ITenantService
 {
-    string GetConnectionString();
+    Task<string> GetConnectionStringAsync(CancellationToken ct = default);
 }

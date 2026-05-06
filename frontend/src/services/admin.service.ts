@@ -1,76 +1,9 @@
 import { adminApi } from "@/lib/admin-api";
 import { useBranchStore } from "@/store/useBranchStore";
+import { BannerRow, BrandRow, CityRow, FacilityRow, HotelRow, RatePlanAdminRow, StaffRow } from "@/types/admin-rateplan";
+import { AdminRoom } from "@/types/admin-room";
 import type { PublicBranch } from "@/types/branch";
-import type { Room } from "@/types/room";
 
-export type StaffRow = {
-  id: string;
-  name: string;
-  email: string;
-  role: "SUPER_ADMIN" | "SPV" | "FO";
-  isActive: boolean;
-};
-
-export type CityRow = {
-  id: string;
-  name: string;
-  isActive: boolean;
-};
-
-export type BrandRow = {
-  id: string;
-  name: string;
-  logoUrl?: string | null;
-  isActive: boolean;
-};
-
-export type FacilityRow = {
-  id: string;
-  name: string;
-  icon?: string | null;
-  isActive: boolean;
-};
-
-export type HotelRow = {
-  id: string;
-  name: string;
-  slug: string;
-  branchCode: string;
-  cityId: string;
-  cityName: string;
-  brandId?: string | null;
-  brandName?: string | null;
-  address: string;
-  description: string;
-  starRating: number;
-  latitude: number;
-  longitude: number;
-  isActive: boolean;
-  images: { id: string; url: string; isPrimary: boolean; sortOrder: number }[];
-  facilities: { facilityId: string; name: string; icon?: string | null }[];
-  nearbyPlaces: { id: string; name: string; distance: string }[];
-};
-
-export type RatePlanAdminRow = {
-  id: string;
-  roomTypeId: string;
-  name: string;
-  price: number;
-  includesBreakfast: boolean;
-  isRefundable: boolean;
-  paymentType: string;
-  termsConditions: string;
-  isActive: boolean;
-};
-
-export type BannerRow = {
-  id: string;
-  title: string;
-  subtitle: string;
-  imageUrl: string;
-  linkUrl: string;
-  sortOrder: number;
-};
 
 export async function getBranches() {
   const { data } = await adminApi.get<PublicBranch[]>("/api/branches");
@@ -87,13 +20,17 @@ export async function getActiveBanners() {
   return data;
 }
 
-export async function getRoomsForBranch(branchCode: string) {
-  const { data } = await adminApi.get<Room[]>("/api/rooms", {
+export async function getRoomsForBranch(branchCode: string): Promise<AdminRoom[]> {
+  const res = await fetch("http://localhost:5000/api/rooms", {
+    credentials: "include",
     headers: {
       "X-Branch-Code": branchCode,
     },
   });
-  return data;
+
+  if (!res.ok) throw new Error("Failed to fetch rooms");
+
+  return res.json();
 }
 
 export async function updateRoomStatus(

@@ -2,12 +2,17 @@ export type RatePlan = {
   id: string;
   name: string;
   price: number;
+  isRefundable: boolean;
+  termsPreview: string;
+};
 
-  benefits?: string;
-  terms?: string;
-
-  isRefundable?: boolean;
-  includesBreakfast?: boolean;
+export type Room = {
+  roomTypeId: string;
+  name: string;
+  basePrice: number;
+  lowestPrice: number;
+  isAvailable: boolean;
+  ratePlans: RatePlan[];
 };
 
 export type RoomType = {
@@ -34,12 +39,6 @@ export type RoomImage = {
   format: string;
 };
 
-export type Room = {
-  id: string;
-  roomNumber: string;
-  status?: "available" | "occupied" | "maintenance";
-  roomType: RoomType;
-};
 
 export type BookingPayload = {
   roomTypeId: string;

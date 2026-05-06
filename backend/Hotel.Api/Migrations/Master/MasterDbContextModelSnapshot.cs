@@ -22,6 +22,34 @@ namespace Hotel.Api.Migrations.Master
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("EmailVerificationToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("ExpiredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Token")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerId");
+
+                    b.HasIndex("ExpiredAt");
+
+                    b.HasIndex("Token")
+                        .IsUnique();
+
+                    b.ToTable("EmailVerificationTokens");
+                });
+
             modelBuilder.Entity("Hotel.Api.Entities.Master.BlogPost", b =>
                 {
                     b.Property<Guid>("Id")
@@ -179,6 +207,8 @@ namespace Hotel.Api.Migrations.Master
 
                     b.HasIndex("Email")
                         .IsUnique();
+
+                    b.HasIndex("Email", "IsVerified");
 
                     b.ToTable("CustomersGlobal");
                 });
@@ -360,6 +390,34 @@ namespace Hotel.Api.Migrations.Master
                     b.HasIndex("HotelId");
 
                     b.ToTable("HotelImages");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Master.HotelPriceSummary", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("HotelId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("LowestPrice")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Slug")
+                        .IsUnique();
+
+                    b.ToTable("HotelPriceSummaries");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Master.NearbyPlace", b =>

@@ -7,64 +7,39 @@ namespace Hotel.Api.Controllers;
 [Route("api/hotel")]
 public class HotelPublicController : ControllerBase
 {
-    private readonly IHotelPublicService _hotelPublicService;
+    private readonly IHotelPublicService _service;
 
-    public HotelPublicController(IHotelPublicService hotelPublicService)
+    public HotelPublicController(IHotelPublicService service)
     {
-        _hotelPublicService = hotelPublicService;
+        _service = service;
     }
 
-    [HttpGet("{branch}/full")]
-    public async Task<IActionResult> GetHotelFull(
-        string branch,
-        [FromQuery] DateTime checkIn,
-        [FromQuery] DateTime checkOut,
-        [FromQuery] int adult = 1,
-        [FromQuery] int child = 0,
-        CancellationToken cancellationToken = default)
+    [HttpGet("{slug}")]
+    public async Task<IActionResult> GetHotel(string slug, CancellationToken ct)
     {
-        try
-        {
-            var hotel = await _hotelPublicService.GetHotelFullAsync(
-                branch,
-                checkIn,
-                checkOut,
-                adult,
-                child,
-                cancellationToken);
-
-            return Ok(hotel);
-        }
-        catch (Exception ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        var result = await _service.GetHotelAsync(slug, ct);
+        return Ok(result);
     }
 
-    [HttpGet("slug/{slug}/full")]
-    public async Task<IActionResult> GetHotelFullBySlug(
+    [HttpGet("{slug}/pricing")]
+    public async Task<IActionResult> GetPricing(
         string slug,
         [FromQuery] DateTime checkIn,
         [FromQuery] DateTime checkOut,
-        [FromQuery] int adult = 1,
-        [FromQuery] int child = 0,
-        CancellationToken cancellationToken = default)
+        CancellationToken ct)
     {
-        try
-        {
-            var hotel = await _hotelPublicService.GetHotelFullBySlugAsync(
-                slug,
-                checkIn,
-                checkOut,
-                adult,
-                child,
-                cancellationToken);
+        var result = await _service.GetPricingAsync(slug, checkIn, checkOut, ct);
+        return Ok(result);
+    }
 
-            return Ok(hotel);
-        }
-        catch (Exception ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+    // 🔥 FIXED ENDPOINT
+    [HttpGet("{slug}/room/{roomTypeId}")]
+    public async Task<IActionResult> GetRoomDetail(
+        string slug,
+        Guid roomTypeId,
+        CancellationToken ct)
+    {
+        var result = await _service.GetRoomDetailAsync(slug, roomTypeId, ct);
+        return Ok(result);
     }
 }

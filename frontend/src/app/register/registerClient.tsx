@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -20,12 +20,6 @@ type RegisterValues = z.infer<typeof schema>;
 
 export default function RegisterClient() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-
-  // 🔐 Safe redirect (hindari open redirect)
-  const redirectParam = searchParams.get("redirect");
-  const redirect =
-    redirectParam && redirectParam.startsWith("/") ? redirectParam : "/";
 
   const {
     register,
@@ -37,9 +31,11 @@ export default function RegisterClient() {
 
   const mutation = useMutation({
     mutationFn: registerClient,
-    onSuccess: () => {
-      toast.success("Register berhasil");
-      router.push(redirect);
+    onSuccess: (_, variables) => {
+      toast.success("Register berhasil, cek email untuk verifikasi");
+      router.push(
+        `/verify-email-info?email=${encodeURIComponent(variables.email)}`,
+      );
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Register gagal");
@@ -117,10 +113,7 @@ export default function RegisterClient() {
 
         <p className="text-center text-sm text-slate-600">
           Sudah punya akun?{" "}
-          <Link
-            className="font-semibold text-slate-900"
-            href={`/login?redirect=${encodeURIComponent(redirect)}`}
-          >
+          <Link className="font-semibold text-slate-900" href={`/login`}>
             Login
           </Link>
         </p>

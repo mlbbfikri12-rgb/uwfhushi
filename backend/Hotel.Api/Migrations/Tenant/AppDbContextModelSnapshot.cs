@@ -89,6 +89,8 @@ namespace Hotel.Api.Migrations.Tenant
 
                     b.HasIndex("CheckIn", "CheckOut");
 
+                    b.HasIndex("Status", "CheckIn");
+
                     b.ToTable("Bookings");
                 });
 
@@ -123,7 +125,8 @@ namespace Hotel.Api.Migrations.Tenant
 
                     b.HasIndex("Email");
 
-                    b.HasIndex("GlobalCustomerId");
+                    b.HasIndex("GlobalCustomerId")
+                        .IsUnique();
 
                     b.ToTable("Customers");
                 });
@@ -327,6 +330,9 @@ namespace Hotel.Api.Migrations.Tenant
                     b.HasIndex("RoomId", "Date")
                         .IsUnique();
 
+                    b.HasIndex("RoomId", "Date", "IsAvailable")
+                        .HasDatabaseName("idx_room_availability_lookup");
+
                     b.ToTable("RoomAvailabilities");
                 });
 
@@ -399,6 +405,8 @@ namespace Hotel.Api.Migrations.Tenant
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Name");
+
                     b.ToTable("RoomTypes");
                 });
 
@@ -417,7 +425,9 @@ namespace Hotel.Api.Migrations.Tenant
 
                     b.HasKey("Id");
 
-                    b.HasIndex("RoomTypeId");
+                    b.HasIndex("RoomTypeId", "Name")
+                        .IsUnique()
+                        .HasDatabaseName("idx_roomtype_facility_lookup");
 
                     b.ToTable("RoomTypeFacilities");
                 });
@@ -479,6 +489,17 @@ namespace Hotel.Api.Migrations.Tenant
                     b.Navigation("RoomType");
                 });
 
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.Payment", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Tenant.Booking", "Booking")
+                        .WithMany()
+                        .HasForeignKey("BookingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Booking");
+                });
+
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.RatePlan", b =>
                 {
                     b.HasOne("Hotel.Api.Entities.Tenant.RoomType", "RoomType")
@@ -499,6 +520,17 @@ namespace Hotel.Api.Migrations.Tenant
                         .IsRequired();
 
                     b.Navigation("RoomType");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.RoomAvailability", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Tenant.Room", "Room")
+                        .WithMany("Availabilities")
+                        .HasForeignKey("RoomId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Room");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.RoomImage", b =>
@@ -535,6 +567,8 @@ namespace Hotel.Api.Migrations.Tenant
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.Room", b =>
                 {
+                    b.Navigation("Availabilities");
+
                     b.Navigation("Bookings");
 
                     b.Navigation("Images");

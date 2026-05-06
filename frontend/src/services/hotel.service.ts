@@ -1,21 +1,48 @@
-import { publicApi } from "@/lib/public-api";
-import type { HotelFullResponse } from "@/types/hotel";
+import { PricingRoom } from "@/types/admin-rateplan";
 
-export async function getHotelFull(params: {
+const API_URL = process.env.NEXT_PUBLIC_API_URL!;
+
+export async function getHotel(slug: string) {
+  const res = await fetch(`${API_URL}/api/hotel/${slug}`, {
+    next: { revalidate: 10 },
+  });
+
+  if (!res.ok) throw new Error("Failed fetch hotel");
+
+  return res.json();
+}
+
+
+export async function getHotelPricing(params: {
   slug: string;
   checkIn: string;
   checkOut: string;
-  adult: number;
-  child: number;
 }) {
-  const { data } = await publicApi.get<HotelFullResponse>(`/api/hotel/slug/${params.slug}/full`, {
-    params: {
-      checkIn: params.checkIn,
-      checkOut: params.checkOut,
-      adult: params.adult,
-      child: params.child,
-    },
+  const query = new URLSearchParams({
+    checkIn: params.checkIn,
+    checkOut: params.checkOut,
   });
 
-  return data;
+  const res = await fetch(
+    `${API_URL}/api/hotel/${params.slug}/pricing?${query}`
+  );
+
+  if (!res.ok) throw new Error("Failed fetch pricing");
+
+  return res.json() as Promise<PricingRoom[]>;
+}
+
+
+// 🔥 TAMBAHAN INI
+export async function getRoomDetail(
+  slug: string,
+  roomTypeId: string
+) {
+  const res = await fetch(
+    `${API_URL}/api/hotel/${slug}/room/${roomTypeId}`
+  );
+
+  if (!res.ok) throw new Error("Failed fetch room detail");
+
+  return res.json();
 }

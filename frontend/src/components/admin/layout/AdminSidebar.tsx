@@ -81,12 +81,20 @@ export function AdminSidebar({ role }: Props) {
         )}
 
         {(role === "SPV" || role === "FO") && (
-          <Link
-            href="/admin/rooms"
-            className={`block px-3 py-2 rounded ${active("/admin/rooms")}`}
-          >
-            Rooms
-          </Link>
+          <>
+            <Link
+              href="/admin/rooms"
+              className={`block px-3 py-2 rounded ${active("/admin/rooms")}`}
+            >
+              Rooms
+            </Link>
+            <Link
+              href="/admin/rate-plans"
+              className={`block px-3 py-2 rounded ${active("/admin/rate-plans")}`}
+            >
+              Rate Plans
+            </Link>
+          </>
         )}
       </nav>
 

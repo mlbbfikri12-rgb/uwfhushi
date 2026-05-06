@@ -14,21 +14,40 @@ public interface IOrderService
 
 public class OrderService : IOrderService
 {
-    private readonly AppDbContext _db;
+    private readonly ITenantDbFactory _tenantDbFactory;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public OrderService(AppDbContext db)
+    public OrderService(
+        ITenantDbFactory tenantDbFactory,
+        IHttpContextAccessor httpContextAccessor)
     {
-        _db = db;
+        _tenantDbFactory = tenantDbFactory;
+        _httpContextAccessor = httpContextAccessor;
+    }
+
+    private string GetBranchCode()
+    {
+        var branchCode = _httpContextAccessor.HttpContext?.Request.Headers["X-Branch-Code"].ToString();
+
+        if (string.IsNullOrWhiteSpace(branchCode))
+            throw new Exception("X-Branch-Code header is missing");
+
+        return branchCode.Trim().ToUpperInvariant();
     }
 
     public async Task<OrderCurrentDto> AddAsync(Guid customerGlobalId, AddOrderItemDto dto, CancellationToken cancellationToken = default)
     {
+        var branchCode = GetBranchCode();
+
+        await using var _db = await _tenantDbFactory.CreateAsync(branchCode, cancellationToken);
+
         var customer = await _db.Customers.FirstOrDefaultAsync(c => c.GlobalCustomerId == customerGlobalId, cancellationToken);
         if (customer == null)
             throw new Exception("Customer not found in this branch");
 
         var checkIn = DateTime.SpecifyKind(dto.CheckIn.Date, DateTimeKind.Utc);
         var checkOut = DateTime.SpecifyKind(dto.CheckOut.Date, DateTimeKind.Utc);
+
         if (checkOut <= checkIn)
             throw new Exception("Invalid date range");
 
@@ -39,7 +58,12 @@ public class OrderService : IOrderService
         if (roomType == null)
             throw new Exception("Room type not found");
 
-        var ratePlan = await _db.RatePlans.FirstOrDefaultAsync(rp => rp.Id == dto.RatePlanId && rp.RoomTypeId == dto.RoomTypeId && rp.IsActive, cancellationToken);
+        var ratePlan = await _db.RatePlans.FirstOrDefaultAsync(
+            rp => rp.Id == dto.RatePlanId &&
+                  rp.RoomTypeId == dto.RoomTypeId &&
+                  rp.IsActive,
+            cancellationToken);
+
         if (ratePlan == null)
             throw new Exception("Rate plan not found");
 
@@ -78,6 +102,7 @@ public class OrderService : IOrderService
         });
 
         draft.UpdatedAt = DateTime.UtcNow;
+
         await _db.SaveChangesAsync(cancellationToken);
 
         return await GetCurrentAsync(customerGlobalId, cancellationToken);
@@ -85,6 +110,10 @@ public class OrderService : IOrderService
 
     public async Task<OrderCurrentDto> GetCurrentAsync(Guid customerGlobalId, CancellationToken cancellationToken = default)
     {
+        var branchCode = GetBranchCode();
+
+        await using var _db = await _tenantDbFactory.CreateAsync(branchCode, cancellationToken);
+
         var customer = await _db.Customers.FirstOrDefaultAsync(c => c.GlobalCustomerId == customerGlobalId, cancellationToken);
         if (customer == null)
             throw new Exception("Customer not found in this branch");
@@ -134,6 +163,10 @@ public class OrderService : IOrderService
 
     public async Task<OrderCurrentDto> DeleteItemAsync(Guid customerGlobalId, Guid orderItemId, CancellationToken cancellationToken = default)
     {
+        var branchCode = GetBranchCode();
+
+        await using var _db = await _tenantDbFactory.CreateAsync(branchCode, cancellationToken);
+
         var customer = await _db.Customers.FirstOrDefaultAsync(c => c.GlobalCustomerId == customerGlobalId, cancellationToken);
         if (customer == null)
             throw new Exception("Customer not found in this branch");
@@ -151,6 +184,7 @@ public class OrderService : IOrderService
 
         _db.OrderItems.Remove(item);
         draft.UpdatedAt = DateTime.UtcNow;
+
         await _db.SaveChangesAsync(cancellationToken);
 
         return await GetCurrentAsync(customerGlobalId, cancellationToken);

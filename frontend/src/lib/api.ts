@@ -20,14 +20,10 @@ api.interceptors.request.use((config) => {
 
   if (!branch) {
     return Promise.reject(
-      new Error("Missing X-Branch-Code. Select a hotel branch first.")
+      new Error("Select a hotel first.")
     );
   }
-
   config.headers["X-Branch-Code"] = branch;
-
-  // ❌ JANGAN pakai Authorization header
-  // backend kamu pakai cookie-based auth
 
   return config;
 });
@@ -35,10 +31,18 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error?.response?.status === 401 && typeof window !== "undefined") {
+    const status = error?.response?.status;
+    const url = error?.config?.url ?? "";
+
+    const isAuthEndpoint =
+      url.includes("/api/order") ||
+      url.includes("/api/auth/me");
+
+    if (status === 401 && typeof window !== "undefined" && !isAuthEndpoint) {
       const redirect = encodeURIComponent(
         window.location.pathname + window.location.search
       );
+
       window.location.href = `/login?redirect=${redirect}`;
     }
 

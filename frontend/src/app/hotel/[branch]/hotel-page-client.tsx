@@ -2,22 +2,29 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { Key, useMemo } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Script from "next/script";
 import * as Icons from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { BranchRouteSync } from "@/features/tenant/components/BranchRouteSync";
 import { BranchSearchForm } from "@/features/tenant/components/BranchSearchForm";
 import { Navbar } from "@/components/layout/navbar";
-import { addOrderItem, deleteOrderItem, getCurrentOrder } from "@/services/order.service";
-import { getHotelFull } from "@/services/hotel.service";
+import { addOrderItem, getCurrentOrder } from "@/services/order.service";
+import { getHotelPricing, getRoomDetail } from "@/services/hotel.service";
+import { getCurrentCustomer } from "@/services/auth.service";
+import { Facility, Hotel, UIRatePlan, UIRoomType } from "@/types/hotel";
+import { PricingRatePlan, PricingRoom } from "@/types/admin-rateplan";
+import { BENEFIT_MAP } from "@/utils/BenefitsMap";
+import { useRouter } from "next/navigation";
+import { addToBookingDraft } from "@/utils/BookingDraftUtils";
 
-type HotelPageClientProps = {
+type Props = {
   slug: string;
   checkIn: string;
   checkOut: string;
   totalRooms: number;
+  hotel: Hotel;
 };
 
 function formatDistance(distanceKm: number) {
@@ -32,25 +39,35 @@ function toImageUrl(url: string) {
     : "https://images.unsplash.com/photo-1566665797739-1674de7a421a?w=1200&q=80";
 }
 
-export default function HotelPageClient({ slug, checkIn, checkOut, totalRooms }: HotelPageClientProps) {
-  const [isOrderOpen, setIsOrderOpen] = useState(false);
+export default function HotelPageClient({
+  slug,
+  checkIn,
+  checkOut,
+  totalRooms,
+  hotel,
+}: Props) {
+  const router = useRouter();
+  const queryClient = useQueryClient();
 
-  const hotelQuery = useQuery({
-    queryKey: ["hotel-full", slug, checkIn, checkOut, totalRooms],
-    queryFn: () =>
-      getHotelFull({
-        slug,
-        checkIn,
-        checkOut,
-        adult: totalRooms,
-        child: 0,
-      }),
+  const customerQuery = useQuery({
+    queryKey: ["customer-me"],
+    queryFn: getCurrentCustomer,
+    retry: false,
+  });
+
+  const isCustomerAuthenticated =
+    customerQuery.isSuccess && Boolean(customerQuery.data?.id);
+
+  const pricingQuery = useQuery<PricingRoom[]>({
+    queryKey: ["pricing", slug, checkIn, checkOut],
+    queryFn: () => getHotelPricing({ slug, checkIn, checkOut }),
     enabled: Boolean(slug && checkIn && checkOut),
   });
 
   const orderQuery = useQuery({
     queryKey: ["order-current", slug],
     queryFn: getCurrentOrder,
+    enabled: isCustomerAuthenticated,
   });
 
   const addMutation = useMutation({
@@ -58,26 +75,101 @@ export default function HotelPageClient({ slug, checkIn, checkOut, totalRooms }:
     onSuccess: () => orderQuery.refetch(),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: deleteOrderItem,
-    onSuccess: () => orderQuery.refetch(),
-  });
-
-  const hotel = hotelQuery.data?.hotel;
-  const images = useMemo(() => hotelQuery.data?.images ?? [], [hotelQuery.data]);
-  const roomTypes = useMemo(() => hotelQuery.data?.roomTypes ?? [], [hotelQuery.data]);
-  const facilities = useMemo(() => hotelQuery.data?.facilities ?? [], [hotelQuery.data]);
-  const nearby = useMemo(() => hotelQuery.data?.nearby ?? [], [hotelQuery.data]);
-  const order = orderQuery.data;
+  const images = useMemo(() => hotel.images ?? [], [hotel.images]);
+  const facilities = useMemo(() => hotel.facilities ?? [], [hotel.facilities]);
+  const nearby = useMemo(() => hotel.nearby ?? [], [hotel.nearby]);
+  //const order = orderQuery.data;
 
   const imageList = useMemo(() => images.slice(0, 5), [images]);
 
-  const sortedNearby = useMemo(() => [...nearby].sort((a, b) => a.distanceKm - b.distanceKm), [nearby]);
+  const sortedNearby = useMemo(
+    () => [...nearby].sort((a, b) => a.distanceKm - b.distanceKm),
+    [nearby],
+  );
 
-  const priceFrom = useMemo(() => {
-    const prices = roomTypes.flatMap((rt) => rt.ratePlans.map((rp) => rp.price));
-    return prices.length > 0 ? Math.min(...prices) : 0;
-  }, [roomTypes]);
+  const handleSelect = async (roomType: UIRoomType, ratePlan: UIRatePlan) => {
+    const draft = {
+      roomTypeId: roomType.id,
+      roomTypeName: roomType.name,
+
+      ratePlanId: ratePlan.id,
+      ratePlanName: ratePlan.name,
+
+      price: ratePlan.price,
+
+      checkIn,
+      checkOut,
+      totalRooms,
+      slug,
+
+      // 🔥 TAMBAHAN (BIAR BOOKING PAGE GAK KOSONG)
+      image: roomType.image,
+      capacity: roomType.capacity,
+      bedType: roomType.bedType,
+    };
+
+    // ✅ save ke local
+    addToBookingDraft(draft);
+
+    // 🔥 prefetch room detail (biar booking page instant)
+    await queryClient.prefetchQuery({
+      queryKey: ["room-detail", slug, roomType.id],
+
+      queryFn: () => getRoomDetail(slug, roomType.id),
+    });
+
+    // ✅ clean URL
+    router.push("/booking");
+
+    // ✅ clean URL (tanpa branch query)
+    router.push("/booking");
+  };
+
+  const priceFrom = hotel.priceFrom ?? 0;
+
+  // 🔥 mapping pricing → roomTypes lama
+  const roomTypes = useMemo<UIRoomType[]>(() => {
+    if (!pricingQuery.data) return [];
+
+    return pricingQuery.data.map(
+      (room: PricingRoom): UIRoomType => ({
+        id: room.roomTypeId,
+        name: room.name,
+        description: room.description ?? "",
+        image: room.image ?? "",
+        capacity: room.capacity ?? 0,
+        bedType: room.bedType ?? "",
+        size: room.size ?? 0,
+
+        facilities: (room.facilities ?? []).map(
+          (f: string): Facility => ({
+            name: f,
+            icon: null,
+          }),
+        ),
+
+        ratePlans: room.ratePlans.map(
+          (rp: PricingRatePlan): UIRatePlan => ({
+            id: rp.id,
+            name: rp.name,
+            benefits: rp.benefits ?? [],
+            terms: rp.termsPreview ?? "",
+            price: rp.price,
+          }),
+        ),
+      }),
+    );
+  }, [pricingQuery.data]);
+
+  const redirectToLogin = () => {
+    const redirect = encodeURIComponent(window.location.href);
+    window.location.href = `/login?redirect=${redirect}`;
+  };
+
+  const getLowestPrice = (roomType: UIRoomType) => {
+    if (!roomType.ratePlans.length) return 0;
+    return Math.min(...roomType.ratePlans.map((rp) => rp.price));
+  };
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -95,8 +187,9 @@ export default function HotelPageClient({ slug, checkIn, checkOut, totalRooms }:
       </div>
 
       <div className="mx-auto max-w-7xl px-6 py-6">
-        {hotelQuery.isLoading && <p className="text-sm text-slate-500">Memuat detail hotel...</p>}
-        {hotelQuery.isError && <p className="text-sm text-red-600">Gagal memuat detail hotel.</p>}
+        {pricingQuery.isLoading && (
+          <p className="text-sm text-slate-500">Memuat room...</p>
+        )}
 
         {hotel && (
           <>
@@ -108,208 +201,312 @@ export default function HotelPageClient({ slug, checkIn, checkOut, totalRooms }:
                   "@context": "https://schema.org",
                   "@type": "Hotel",
                   name: hotel.name,
-                  address: hotel.address,
-                  aggregateRating: {
-                    "@type": "AggregateRating",
-                    ratingValue: hotel.rating,
-                    reviewCount: hotel.reviewCount,
-                  },
-                  geo: {
-                    "@type": "GeoCoordinates",
-                    latitude: hotel.latitude,
-                    longitude: hotel.longitude,
-                  },
                 }),
               }}
             />
 
-            <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            {/* HEADER */}
+            <div className="flex justify-between items-start mb-8">
               <div>
-                <h1 className="text-2xl font-bold text-slate-900">{hotel.name}</h1>
-                <div className="mt-2 flex items-center gap-2">
-                  <div className="flex items-center gap-1">
-                    {[1, 2, 3, 4, 5].map((star) => (
-                      <Icons.Star
-                        key={star}
-                        size={14}
-                        className={star <= Math.round(hotel.rating) ? "fill-amber-400 text-amber-400" : "fill-slate-200 text-slate-200"}
-                      />
-                    ))}
-                  </div>
-                  <span className="text-sm text-slate-600">{hotel.rating.toFixed(1)} ({hotel.reviewCount} reviews)</span>
-                </div>
-                <div className="mt-2 flex items-center gap-1.5 text-sm text-slate-500">
-                  <Icons.MapPin size={14} className="text-[#c4a661]" />
-                  {hotel.address}
-                </div>
+                <h1 className="text-2xl font-bold">{hotel.name}</h1>
+                <p className="text-sm text-slate-500">{hotel.city}</p>
               </div>
+
               <div className="text-right">
-                <p className="text-xs text-slate-400">Starts From</p>
-                <p className="text-2xl font-bold text-slate-900">Rp {priceFrom.toLocaleString("id-ID")}</p>
-                <p className="text-xs text-slate-400">/night</p>
+                <p className="text-xs text-slate-400">Starts from</p>
+
+                <p className="text-2xl font-bold text-[#c4a661]">
+                  Rp {priceFrom.toLocaleString("id-ID")}
+                </p>
+
+                <button className="mt-2 px-4 py-2 bg-[#1a1f3c] text-white rounded-lg text-sm font-semibold">
+                  Select Room
+                </button>
               </div>
             </div>
 
+            {/* IMAGES */}
             {imageList.length > 0 && (
               <div className="mb-8 grid h-[380px] grid-cols-4 grid-rows-2 gap-2">
                 <div className="relative col-span-2 row-span-2 overflow-hidden rounded-l-xl">
-                  <Image src={toImageUrl(imageList[0].url)} alt={hotel.name} fill className="object-cover" unoptimized />
+                  <Image
+                    src={toImageUrl(imageList[0])}
+                    alt={hotel.name}
+                    fill
+                    className="object-cover"
+                    unoptimized
+                  />
                 </div>
-                {imageList.slice(1).map((image, index) => (
-                  <div key={`${image.url}-${index}`} className="relative overflow-hidden">
-                    <Image src={toImageUrl(image.url)} alt={`${hotel.name}-${index + 2}`} fill className="object-cover" unoptimized />
-                  </div>
-                ))}
+                {imageList
+                  .slice(1)
+                  .map((image: string, index: Key | null | undefined) => (
+                    <div key={index} className="relative overflow-hidden">
+                      <Image
+                        src={toImageUrl(image)}
+                        alt={hotel.name}
+                        fill
+                        className="object-cover"
+                        unoptimized
+                      />
+                    </div>
+                  ))}
               </div>
             )}
 
             <div className="mb-10">
-              <BranchSearchForm branch={hotel.branchCode} />
+              <BranchSearchForm
+                branch={hotel.branchCode}
+                initialKeyword={hotel.name} // 🔥 INI KUNCINYA
+                hideSearchButton
+              />
             </div>
 
+            {/* OVERVIEW */}
             <section className="mb-10">
-              <h2 className="mb-3 text-xl font-bold text-slate-800">Overview</h2>
-              <p className="max-w-4xl leading-relaxed text-slate-600">{hotel.description}</p>
+              <h2 className="mb-3 text-xl font-bold text-slate-800">
+                Overview
+              </h2>
+              <p className="max-w-4xl leading-relaxed text-slate-600">
+                {hotel.description}
+              </p>
             </section>
 
+            {/* FACILITIES */}
             <section className="mb-10">
-              <h2 className="mb-4 text-xl font-bold text-slate-800">Facilities</h2>
+              <h2 className="mb-4 text-xl font-bold text-slate-800">
+                Facilities
+              </h2>
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-                {facilities.map((facility) => {
-                  const Icon = Icons[facility.icon as keyof typeof Icons] as LucideIcon | undefined;
+                {facilities.map((facility: Facility) => {
+                  const Icon = Icons[facility.icon as keyof typeof Icons] as
+                    | LucideIcon
+                    | undefined;
+
                   return (
-                    <div key={facility.name} className="group flex items-center gap-3 rounded-2xl border border-[#e2e8f0] bg-white p-4 transition-all duration-200 hover:-translate-y-[2px] hover:shadow-md">
+                    <div
+                      key={facility.name}
+                      className="group flex items-center gap-3 rounded-2xl border border-[#e2e8f0] bg-white p-4 transition-all duration-200 hover:-translate-y-[2px] hover:shadow-md"
+                    >
                       <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f8fafc] transition group-hover:bg-[#1a1f3c]/5">
-                        {Icon ? <Icon size={18} className="text-[#1a1f3c]" /> : <span className="text-xs text-[#94a3b8]">?</span>}
+                        {Icon ? (
+                          <Icon size={18} className="text-[#1a1f3c]" />
+                        ) : (
+                          <span className="text-xs text-[#94a3b8]">?</span>
+                        )}
                       </div>
-                      <span className="text-sm font-medium text-[#0f172a]">{facility.name}</span>
+
+                      <span className="text-sm font-medium text-[#0f172a]">
+                        {facility.name}
+                      </span>
                     </div>
                   );
                 })}
               </div>
             </section>
 
+            {/* MAP + NEARBY */}
             <section className="mb-10 grid gap-6 md:grid-cols-2">
-              <div>
-                <h2 className="mb-4 text-xl font-bold text-slate-800">Location</h2>
-                <iframe
-                  src={`https://maps.google.com/maps?q=${encodeURIComponent(`${hotel.name} ${hotel.latitude},${hotel.longitude}`)}&z=15&output=embed`}
-                  className="h-64 w-full rounded-xl border-0"
-                  title="Hotel Location"
-                />
-              </div>
-              <div>
-                <h2 className="mb-4 text-xl font-bold text-slate-800">Nearby Places</h2>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-2">
-                  {sortedNearby.map((item) => (
-                    <div key={item.name} className="group rounded-2xl border border-[#e2e8f0] bg-white p-4 transition-all duration-200 hover:-translate-y-[2px] hover:shadow-md">
-                      <div className="text-sm font-medium text-[#0f172a] leading-snug">{item.name}</div>
-                      <div className="mt-2 text-sm font-semibold text-[#c4a661]">{formatDistance(item.distanceKm)}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
+              <iframe
+                src={`https://maps.google.com/maps?q=${hotel.latitude},${hotel.longitude}&z=15&output=embed`}
+                className="h-64 w-full rounded-xl border-0"
+              />
 
-            <section>
-              <h2 className="mb-4 text-xl font-bold text-slate-800">Select Your Room</h2>
-              <div className="space-y-5">
-                {roomTypes.map((roomType) => (
-                  <div key={roomType.id} className="rounded-xl border border-slate-200 bg-white p-5">
-                    <div className="mb-4 flex flex-col gap-4 md:flex-row">
-                      <div className="relative h-40 w-full overflow-hidden rounded-lg md:w-56">
-                        <Image src={toImageUrl(roomType.image)} alt={roomType.name} fill className="object-cover" unoptimized />
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="text-lg font-semibold text-slate-900">{roomType.name}</h3>
-                        <p className="mt-1 text-sm text-slate-500">{roomType.description}</p>
-                        <p className="mt-2 text-xs text-slate-500">{roomType.capacity} guests | {roomType.bedType} | {roomType.size} m2</p>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {roomType.facilities.map((facility) => (
-                            <span key={facility} className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600">{facility}</span>
-                          ))}
-                        </div>
-                      </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2">
+                {sortedNearby.map((item) => (
+                  <div
+                    key={item.name}
+                    className="group rounded-2xl border border-[#e2e8f0] bg-white p-4 transition-all duration-200 hover:-translate-y-[2px] hover:shadow-md"
+                  >
+                    <div className="text-sm font-medium text-[#0f172a] leading-snug">
+                      {item.name}
                     </div>
 
-                    <div className="space-y-3">
-                      {roomType.ratePlans.map((ratePlan) => (
-                        <div key={ratePlan.id} className="flex flex-col items-start justify-between gap-3 rounded-lg border border-slate-200 p-4 md:flex-row md:items-center">
-                          <div>
-                            <p className="font-semibold text-slate-900">{ratePlan.name}</p>
-                            <p className="text-xs text-slate-500">{ratePlan.benefits}</p>
-                            <p className="text-xs text-slate-400">{ratePlan.terms}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-lg font-bold text-[#c4a661]">Rp {ratePlan.price.toLocaleString("id-ID")}</p>
-                            <p className="text-xs text-slate-400">per night</p>
-                            <button
-                              onClick={() =>
-                                addMutation.mutate({
-                                  roomTypeId: roomType.id,
-                                  ratePlanId: ratePlan.id,
-                                  checkIn,
-                                  checkOut,
-                                  totalRooms,
-                                })
-                              }
-                              className="mt-2 rounded-lg bg-[#1a1f3c] px-4 py-2 text-sm font-semibold text-white"
-                            >
-                              Select
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                    <div className="mt-2 text-sm font-semibold text-[#c4a661]">
+                      {formatDistance(item.distanceKm)}
                     </div>
                   </div>
                 ))}
               </div>
             </section>
+
+            {/* ROOMS (LAYOUT SAMA) */}
+            <section>
+              <h2 className="mb-4 text-xl font-bold text-slate-800">
+                Select Your Room
+              </h2>
+
+              <div className="space-y-6">
+                {roomTypes.map((roomType: UIRoomType) => {
+                  const lowestPrice =
+                    roomType.ratePlans.length > 0
+                      ? Math.min(...roomType.ratePlans.map((rp) => rp.price))
+                      : 0;
+
+                  return (
+                    <div
+                      key={roomType.id}
+                      className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start bg-slate-100 p-4 rounded-2xl border border-slate-200"
+                    >
+                      {/* ================= LEFT: ROOM CARD ================= */}
+                      <div className="relative">
+                        <div className="rounded-xl border border-slate-200 bg-white overflow-hidden sticky top-24">
+                          {/* IMAGE */}
+                          <div className="relative h-48 w-full">
+                            <Image
+                              src={toImageUrl(roomType.image)}
+                              alt={roomType.name}
+                              fill
+                              className="object-cover"
+                              unoptimized
+                            />
+
+                            {/* ROOM BADGE */}
+                            <div className="absolute top-2 left-2 z-10 rounded-full bg-white/90 backdrop-blur px-3 py-1 text-xs font-semibold text-slate-700 border">
+                              {roomType.name}
+                            </div>
+                          </div>
+
+                          {/* CONTENT */}
+                          <div className="p-4">
+                            <h3 className="text-lg font-semibold text-slate-900">
+                              {roomType.name}
+                            </h3>
+
+                            {roomType.description && (
+                              <p className="text-sm text-slate-500 mt-1">
+                                {roomType.description}
+                              </p>
+                            )}
+
+                            <p className="text-sm text-slate-500 mt-2">
+                              {roomType.capacity ?? 2} guests •{" "}
+                              {roomType.bedType || "Standard Bed"}
+                            </p>
+
+                            {/* FACILITIES */}
+                            {roomType.facilities?.length > 0 && (
+                              <div className="mt-3 border-t pt-3">
+                                <p className="text-sm font-medium text-slate-700">
+                                  Amenities
+                                </p>
+
+                                <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                                  {roomType.facilities.slice(0, 4).map((f) => (
+                                    <span
+                                      key={f.name}
+                                      className="bg-slate-100 px-2 py-1 rounded text-slate-600"
+                                    >
+                                      {f.name}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            <button className="mt-4 w-full rounded-lg bg-[#1a1f3c] text-white py-2 text-sm font-semibold hover:bg-[#252c52] transition">
+                              See Room Detail
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* ================= RIGHT: RATE PLANS ================= */}
+                      <div className="md:col-span-2 space-y-3 border-l pl-4 border-slate-200">
+                        {roomType.ratePlans.length === 0 ? (
+                          <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
+                            No available rate for this room
+                          </div>
+                        ) : (
+                          roomType.ratePlans.map((ratePlan: UIRatePlan) => {
+                            const isBest = ratePlan.price === lowestPrice;
+
+                            return (
+                              <div
+                                key={ratePlan.id}
+                                className={`rounded-xl border p-4 flex flex-col md:flex-row justify-between gap-4 transition
+                      ${
+                        isBest
+                          ? "border-green-400 bg-green-50"
+                          : "border-slate-200 bg-white"
+                      }`}
+                              >
+                                {/* LEFT */}
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <p className="font-semibold text-slate-900">
+                                      {ratePlan.name}
+                                    </p>
+
+                                    {isBest && (
+                                      <span className="text-[10px] font-bold text-green-700 bg-green-100 px-2 py-0.5 rounded">
+                                        BEST DEAL
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* BENEFITS */}
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    {ratePlan.benefits?.map((code) => {
+                                      const benefit =
+                                        BENEFIT_MAP[
+                                          code as keyof typeof BENEFIT_MAP
+                                        ];
+                                      if (!benefit) return null;
+
+                                      const Icon = benefit.icon;
+
+                                      return (
+                                        <span
+                                          key={code}
+                                          className="flex items-center gap-1 text-xs bg-slate-100 px-2 py-1 rounded text-slate-700"
+                                        >
+                                          <Icon size={12} />
+                                          {benefit.label}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* TERMS */}
+                                  {ratePlan.terms && (
+                                    <p className="text-xs text-slate-400 mt-2 line-clamp-2">
+                                      {ratePlan.terms}
+                                    </p>
+                                  )}
+                                </div>
+
+                                {/* RIGHT */}
+                                <div className="text-right min-w-[160px]">
+                                  <p className="text-xl font-bold text-[#c4a661]">
+                                    Rp {ratePlan.price.toLocaleString("id-ID")}
+                                  </p>
+
+                                  <p className="text-xs text-slate-400">
+                                    /room/night
+                                  </p>
+
+                                  <button
+                                    onClick={() =>
+                                      handleSelect(roomType, ratePlan)
+                                    }
+                                    className="mt-3 w-full rounded-lg bg-[#1a1f3c] px-4 py-2 text-sm font-semibold text-white hover:bg-[#252c52] transition"
+                                  >
+                                    Select
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           </>
         )}
       </div>
-
-      {order && order.items.length > 0 && (
-        <>
-          <button onClick={() => setIsOrderOpen(true)} className="fixed bottom-6 right-6 z-40 rounded-full bg-[#1a1f3c] px-5 py-3 text-sm font-semibold text-white shadow-lg">
-            View Order ({order.items.length})
-          </button>
-
-          {isOrderOpen && (
-            <div className="fixed inset-0 z-50 bg-black/35">
-              <div className="absolute right-0 top-0 h-full w-full max-w-md bg-white p-5 shadow-2xl">
-                <div className="mb-4 flex items-center justify-between">
-                  <h3 className="text-lg font-semibold">Order Summary</h3>
-                  <button onClick={() => setIsOrderOpen(false)} className="text-sm text-slate-500">Close</button>
-                </div>
-
-                <div className="space-y-3 overflow-auto">
-                  {order.items.map((item) => (
-                    <div key={item.id} className="rounded-lg border border-slate-200 p-3">
-                      <p className="font-semibold text-slate-900">{item.roomTypeName}</p>
-                      <p className="text-xs text-slate-500">{item.ratePlanName}</p>
-                      <p className="text-xs text-slate-500">{item.checkIn} - {item.checkOut}</p>
-                      <p className="text-xs text-slate-500">{item.totalRooms} room(s)</p>
-                      <p className="mt-1 font-semibold text-[#c4a661]">Rp {item.totalPrice.toLocaleString("id-ID")}</p>
-                      <button onClick={() => deleteMutation.mutate(item.id)} className="mt-2 text-xs text-red-600 underline">Remove</button>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-6 border-t border-slate-200 pt-4">
-                  <div className="mb-4 flex items-center justify-between">
-                    <span className="text-sm text-slate-600">Grand Total</span>
-                    <span className="text-xl font-bold text-slate-900">Rp {order.grandTotal.toLocaleString("id-ID")}</span>
-                  </div>
-                  <Link href={`/booking?branch=${hotel?.branchCode ?? ""}`} className="block rounded-lg bg-[#1a1f3c] px-4 py-3 text-center text-sm font-semibold text-white">
-                    Continue Booking
-                  </Link>
-                </div>
-              </div>
-            </div>
-          )}
-        </>
-      )}
     </main>
   );
 }

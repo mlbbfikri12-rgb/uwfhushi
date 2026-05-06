@@ -1,21 +1,49 @@
-import type { RoomType } from "@/types/room";
+import { BenefitCode } from "@/utils/BenefitsMap";
 
-export type HotelFullResponse = {
-  hotel: {
-    hotelId: string;
-    branchCode: string;
+export type Hotel = {
+  id: string;
+  name: string;
+  city: string;
+
+  description: string;
+  latitude: number;
+  longitude: number;
+  branchCode: string;
+
+  images: string[];
+  facilities: Facility[];
+
+  nearby: {
     name: string;
-    address: string;
-    city: string;
-    brand: string;
-    rating: number;
-    reviewCount: number;
-    description: string;
-    latitude: number;
-    longitude: number;
-  };
-  images: { url: string; type: string; sortOrder: number }[];
-  facilities: { name: string; icon: string }[];
-  nearby: { name: string; distanceKm: number }[];
-  roomTypes: RoomType[];
+    distanceKm: number;
+  }[];
+
+  priceFrom: number;
+  priceType: "estimate" | "exact";
+};
+
+export type Facility = {
+  name: string;
+  icon?: string | null;
+};
+
+
+export type UIRatePlan = {
+  id: string;
+  name: string;
+  benefits?: BenefitCode[]; // ✅ FIX
+  terms?: string;
+  price: number;
+};
+
+export type UIRoomType = {
+  id: string;
+  name: string;
+  description?: string;
+  image: string;
+  capacity: number;
+  bedType: string;
+  size: number;
+  facilities: Facility[];
+  ratePlans: UIRatePlan[];
 };

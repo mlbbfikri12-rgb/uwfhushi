@@ -1,255 +1,408 @@
-using Hotel.Api.Configurations;
 using Hotel.Api.Data;
-using Hotel.Api.DTOs;
+using Hotel.Api.Entities.Tenant;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 
 namespace Hotel.Api.Services;
 
 public interface IHotelPublicService
 {
-    Task<HotelFullPublicDto> GetHotelFullAsync(
-        string branch,
-        DateTime checkIn,
-        DateTime checkOut,
-        int adultCount,
-        int childCount,
-        CancellationToken cancellationToken = default);
-
-    Task<HotelFullPublicDto> GetHotelFullBySlugAsync(
-        string slug,
-        DateTime checkIn,
-        DateTime checkOut,
-        int adultCount,
-        int childCount,
-        CancellationToken cancellationToken = default);
+    Task<HotelSummaryDto> GetHotelAsync(string slug, CancellationToken ct);
+    Task<List<RoomPricingDto>> GetPricingAsync(string slug, DateTime checkIn, DateTime checkOut, CancellationToken ct);
+    Task<RoomDetailDto> GetRoomDetailAsync(string slug, Guid roomTypeId, CancellationToken ct);
 }
 
 public class HotelPublicService : IHotelPublicService
 {
     private readonly MasterDbContext _masterDb;
     private readonly ICacheService _cache;
-    private readonly CacheSettings _cacheSettings;
-    private readonly BookingValidationSettings _validationSettings;
+    private readonly ITenantDbFactory _tenantDbFactory;
+    private readonly IDistributedLockService _lock;
 
     public HotelPublicService(
         MasterDbContext masterDb,
         ICacheService cache,
-        IOptions<CacheSettings> cacheSettings,
-        IOptions<BookingValidationSettings> validationSettings)
+        ITenantDbFactory tenantDbFactory,
+        IDistributedLockService @lock)
     {
         _masterDb = masterDb;
         _cache = cache;
-        _cacheSettings = cacheSettings.Value;
-        _validationSettings = validationSettings.Value;
+        _tenantDbFactory = tenantDbFactory;
+        _lock = @lock;
     }
 
-    public async Task<HotelFullPublicDto> GetHotelFullAsync(
-        string branch,
-        DateTime checkIn,
-        DateTime checkOut,
-        int adultCount,
-        int childCount,
-        CancellationToken cancellationToken = default)
+    // =========================
+    // HELPER: resolve branch
+    // =========================
+    private async Task<string> GetBranchCodeBySlug(string slug, CancellationToken ct)
     {
-        var branchCode = branch.Trim().ToUpperInvariant();
-        return await GetHotelFullInternalAsync(branchCode, checkIn, checkOut, adultCount, childCount, cancellationToken);
-    }
-
-    public async Task<HotelFullPublicDto> GetHotelFullBySlugAsync(
-        string slug,
-        DateTime checkIn,
-        DateTime checkOut,
-        int adultCount,
-        int childCount,
-        CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(slug))
-            throw new Exception("Slug is required");
-
-        var normalizedSlug = slug.Trim().ToLowerInvariant();
-        var hotel = await _masterDb.Hotels
+        var branchCode = await _masterDb.Hotels
             .AsNoTracking()
-            .Where(h => h.IsActive && h.Slug == normalizedSlug)
-            .Select(h => new { h.BranchCode })
-            .FirstOrDefaultAsync(cancellationToken);
+            .Where(h => h.Slug == slug && h.IsActive)
+            .Select(h => h.BranchCode)
+            .FirstOrDefaultAsync(ct);
 
-        if (hotel == null)
+        if (branchCode == null)
             throw new Exception("Hotel not found");
 
-        return await GetHotelFullInternalAsync(hotel.BranchCode, checkIn, checkOut, adultCount, childCount, cancellationToken);
+        return branchCode;
     }
 
-    private async Task<HotelFullPublicDto> GetHotelFullInternalAsync(
-        string branchCode,
-        DateTime checkIn,
-        DateTime checkOut,
-        int adultCount,
-        int childCount,
-        CancellationToken cancellationToken)
+    private IEnumerable<string> mapBenefits(RatePlan ratePlan)
     {
-        var checkInDate = DateTime.SpecifyKind(checkIn.Date, DateTimeKind.Utc);
-        var checkOutDate = DateTime.SpecifyKind(checkOut.Date, DateTimeKind.Utc);
+        var benefits = new List<string>();
 
-        ValidateRequest(branchCode, checkInDate, checkOutDate, adultCount, childCount);
+        if (ratePlan.IncludesBreakfast)
+        {
+            benefits.Add("BREAKFAST");
+        }
 
-        var cacheKey = $"hotel:full:{branchCode}:{checkInDate:yyyyMMdd}:{checkOutDate:yyyyMMdd}:adult:{adultCount}:child:{childCount}";
-        var cached = await _cache.GetAsync<HotelFullPublicDto>(cacheKey, cancellationToken);
-        if (cached != null)
-            return cached;
+        if (ratePlan.PaymentType == "online")
+        {
+            benefits.Add("ONLINE_PAYMENT");
+        }
+        else
+        {
+            benefits.Add("HOTEL_PAYMENT");
+        }
+
+        if (ratePlan.IsRefundable)
+        {
+            benefits.Add("CANCELABLE");
+        }
+        else
+            benefits.Add("NON_REFUNDABLE");
+        return benefits;
+    }
+
+
+    // =========================
+    // 1. HOTEL SUMMARY
+    // =========================
+    public async Task<HotelSummaryDto> GetHotelAsync(string slug, CancellationToken ct)
+    {
+        var cacheKey = $"hotel:summary:{slug}";
+
+        var cached = await _cache.GetAsync<HotelSummaryDto>(cacheKey, ct);
+        if (cached != null) return cached;
+
+        await using var handle = await _lock.AcquireAsync(cacheKey);
+
+        cached = await _cache.GetAsync<HotelSummaryDto>(cacheKey, ct);
+        if (cached != null) return cached;
 
         var hotel = await _masterDb.Hotels
-            .AsNoTracking()
-            .Include(h => h.City)
-            .Include(h => h.Brand)
-            .Include(h => h.Images)
-            .Include(h => h.HotelFacilities)
-            .ThenInclude(hf => hf.Facility)
-            .Include(h => h.NearbyPlaces)
-            .FirstOrDefaultAsync(h => h.BranchCode == branchCode && h.IsActive, cancellationToken);
+    .AsNoTracking()
+    .Where(h => h.Slug == slug && h.IsActive)
+    .Select(h => new HotelSummaryDto
+    {
+        Id = h.Id,
+        Name = h.Name,
+        Description = h.Description,
+        City = h.City!.Name,
 
-        if (hotel == null)
-            throw new Exception("Hotel not found");
+        Latitude = h.Latitude,
+        Longitude = h.Longitude,
+        BranchCode = h.BranchCode,
 
-        var branchEntity = await _masterDb.Branches
-            .AsNoTracking()
-            .FirstOrDefaultAsync(b => b.Code == branchCode && b.IsActive, cancellationToken);
+        Images = h.Images
+            .OrderBy(i => i.SortOrder)
+            .Select(i => i.Url)
+            .ToList(),
 
-        if (branchEntity == null)
-            throw new Exception("Branch not found");
-
-        var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseNpgsql($"Host={branchEntity.DbHost};Port={branchEntity.DbPort};Database={branchEntity.DbName};Username={branchEntity.DbUser};Password={branchEntity.DbPassword}")
-            .Options;
-
-        await using var tenantDb = new AppDbContext(options);
-        var dates = Enumerable.Range(0, (checkOutDate - checkInDate).Days)
-            .Select(offset => checkInDate.AddDays(offset))
-            .ToList();
-
-        var roomTypes = await tenantDb.RoomTypes
-            .AsNoTracking()
-            .Where(rt =>
-                rt.MaxAdults >= adultCount &&
-                rt.MaxChildren >= childCount &&
-                rt.Rooms.Any(r =>
-                    r.Status == "available" &&
-                    !tenantDb.RoomAvailabilities.Any(a =>
-                        a.RoomId == r.Id &&
-                        dates.Contains(a.Date) &&
-                        !a.IsAvailable)))
-            .OrderBy(rt => rt.BasePrice)
-            .Select(rt => new HotelRoomTypeDto
+        Facilities = h.HotelFacilities
+            .Select(f => new HotelFacilityDto
             {
-                Id = rt.Id,
-                Name = rt.Name,
-                Image = rt.ImageUrl,
-                Size = rt.Size,
-                BedType = rt.BedType,
-                Capacity = rt.Capacity,
-                Description = rt.Description,
-                Facilities = rt.Facilities.Select(f => f.Name).ToList(),
-                RatePlans = rt.RatePlans
-                    .Where(rp => rp.IsActive)
+                Name = f.Facility!.Name,
+                Icon = f.Facility!.Icon
+            })
+            .ToList(),
+
+        Nearby = h.NearbyPlaces
+            .OrderBy(p => p.DistanceKm)
+            .Select(p => new NearbyPlaceDto
+            {
+                Name = p.Name,
+                DistanceKm = p.DistanceKm
+            })
+            .ToList()
+    })
+    .FirstOrDefaultAsync(ct);
+
+        if (hotel == null)
+            throw new Exception("Hotel not found");
+
+        // 🔥 ambil dari precomputed (MASTER)
+        hotel.PriceFrom = await _masterDb.HotelPriceSummaries
+            .Where(x => x.Slug == slug)
+            .Select(x => (decimal?)x.LowestPrice)
+            .FirstOrDefaultAsync(ct);
+
+        // ❗ JANGAN fallback ke 0 → biar FE handle
+        // hotel.PriceFrom tetap null kalau belum ada
+
+        await _cache.SetAsync(cacheKey, hotel, TimeSpan.FromHours(6), ct);
+
+        return hotel;
+    }
+
+    // =========================
+    // 2. PRICING
+    // =========================
+    public async Task<List<RoomPricingDto>> GetPricingAsync(
+    string slug,
+    DateTime checkIn,
+    DateTime checkOut,
+    CancellationToken ct)
+    {
+
+        checkIn = DateTime.SpecifyKind(checkIn.Date, DateTimeKind.Utc);
+        checkOut = DateTime.SpecifyKind(checkOut.Date, DateTimeKind.Utc);
+        // ❗ VALIDASI WAJIB
+        if (checkOut <= checkIn)
+            throw new Exception("Invalid date range");
+
+        var start = checkIn;
+        var end = checkOut;
+
+        var cacheKey = $"hotel:pricing:{slug}:{start:yyyyMMdd}:{end:yyyyMMdd}";
+
+        var cached = await _cache.GetAsync<List<RoomPricingDto>>(cacheKey, ct);
+        if (cached != null) return cached;
+
+        await using var handle = await _lock.AcquireAsync(cacheKey);
+
+        cached = await _cache.GetAsync<List<RoomPricingDto>>(cacheKey, ct);
+        if (cached != null) return cached;
+
+        // 🔥 resolve tenant
+        var branchCode = await GetBranchCodeBySlug(slug, ct);
+        await using var tenantDb = await _tenantDbFactory.CreateAsync(branchCode, ct);
+
+        // =========================
+        // 🔥 STEP 1: ambil available rooms (INDEX FRIENDLY)
+        // =========================
+        var availableRoomIds = (await tenantDb.Rooms
+            .AsNoTracking()
+            .Where(r =>
+                r.Status == "available" &&
+                !tenantDb.RoomAvailabilities.Any(a =>
+                    a.RoomId == r.Id &&
+                    a.Date >= start &&
+                    a.Date < end &&
+                    !a.IsAvailable))
+            .Select(r => r.Id)
+            .ToListAsync(ct))
+            .ToHashSet(); // 🔥 O(1) lookup
+
+        // =========================
+        // 🔥 STEP 2: ambil roomTypes + ratePlans
+        // =========================
+        var roomTypes = await tenantDb.RoomTypes
+    .AsNoTracking()
+    .Where(rt => rt.RatePlans.Any(rp => rp.IsActive)) // 🔥 FILTER PENTING
+    .Select(rt => new
+    {
+        rt.Id,
+        rt.Name,
+        rt.Description,
+        rt.Size,
+        rt.BedType,
+        rt.Capacity,
+        rt.MaxAdults,
+        rt.MaxChildren,
+        rt.BasePrice,
+        rt.ImageUrl,
+        facilities = rt.Facilities.Select(f => f.Name),
+        Rooms = rt.Rooms
+            .Where(r => r.Status == "available")
+            .Select(r => r.Id),
+        RatePlans = rt.RatePlans
+            .Where(rp => rp.IsActive)
+    })
+    .ToListAsync(ct);
+
+        // =========================
+        // 🔥 STEP 3: mapping + compute
+        // =========================
+        var result = roomTypes
+            .Select(rt =>
+            {
+                var availableRooms = rt.Rooms
+                    .Where(r => availableRoomIds.Contains(r))
+                    .ToList();
+
+                var isAvailable = availableRooms.Count > 0;
+
+                var ratePlans = rt.RatePlans
                     .OrderBy(rp => rp.Price)
-                    .Select(rp => new RatePlanDto
+                    .ThenByDescending(rp => rp.IsRefundable)
+                    .Take(5) // 🔥 limit payload
+                    .Select(rp => new RatePlanSummaryDto
                     {
                         Id = rp.Id,
                         Name = rp.Name,
                         Price = rp.Price,
-                        Benefits = BuildBenefits(rp.IncludesBreakfast, rp.IsRefundable, rp.PaymentType),
+                        benefits = mapBenefits(rp),
+                        TermsPreview = rp.IsRefundable
+                            ? "Free cancellation"
+                            : "Non-refundable"
+                    })
+                    .ToList();
+
+                var lowestPrice = isAvailable && ratePlans.Any()
+                    ? ratePlans.Min(rp => rp.Price)
+                    : 0;
+
+                return new RoomPricingDto
+                {
+                    RoomTypeId = rt.Id,
+                    Name = rt.Name,
+                    Description = rt.Description,
+                    Size = rt.Size,
+                    BedType = rt.BedType,
+                    Capacity = rt.Capacity,
+                    MaxAdults = rt.MaxAdults,
+                    MaxChildren = rt.MaxChildren,
+                    BasePrice = rt.BasePrice,
+                    IsAvailable = isAvailable,
+                    LowestPrice = lowestPrice,
+                    RatePlans = isAvailable ? ratePlans : new List<RatePlanSummaryDto>(),
+                    Image = rt.ImageUrl,
+                    Facilities = rt.facilities
+                };
+            })
+            .OrderBy(r => r.LowestPrice)
+            .ToList();
+
+        //cache sebentar aja karena ini cukup berat, dan data relatif tidak sering berubah
+        await _cache.SetAsync(cacheKey, result, TimeSpan.FromSeconds(20), ct);
+
+        return result;
+    }
+    // =========================
+    // 3. ROOM DETAIL
+    // =========================
+    public async Task<RoomDetailDto> GetRoomDetailAsync(string slug, Guid roomTypeId, CancellationToken ct)
+    {
+        var branchCode = await GetBranchCodeBySlug(slug, ct);
+
+        await using var tenantDb = await _tenantDbFactory.CreateAsync(branchCode, ct);
+
+        // ❗ VALIDASI biar tidak cross-hotel
+        var exists = await tenantDb.RoomTypes
+            .AnyAsync(rt => rt.Id == roomTypeId, ct);
+
+        if (!exists)
+            throw new Exception("Room not found for this hotel");
+
+        var room = await tenantDb.RoomTypes
+            .AsNoTracking()
+            .Where(rt => rt.Id == roomTypeId)
+            .Select(rt => new RoomDetailDto
+            {
+                Id = rt.Id,
+                Name = rt.Name,
+                Description = rt.Description,
+                Image = rt.ImageUrl,
+                RatePlans = rt.RatePlans
+                    .Where(rp => rp.IsActive)
+                    .Select(rp => new RatePlanDetailDto
+                    {
+                        Id = rp.Id,
+                        Name = rp.Name,
+                        Price = rp.Price,
                         Terms = rp.TermsConditions
                     })
                     .ToList()
             })
-            .ToListAsync(cancellationToken);
+            .FirstOrDefaultAsync(ct);
 
-        var response = new HotelFullPublicDto
-        {
-            Hotel = new PublicHotelMetaDto
-            {
-                HotelId = hotel.Id,
-                BranchCode = hotel.BranchCode,
-                Name = hotel.Name,
-                Address = hotel.Address,
-                City = hotel.City?.Name ?? string.Empty,
-                Brand = hotel.Brand?.Name ?? string.Empty,
-                Rating = hotel.Rating,
-                ReviewCount = hotel.ReviewCount,
-                Description = hotel.Description,
-                Latitude = hotel.Latitude,
-                Longitude = hotel.Longitude
-            },
-            Images = hotel.Images
-                .OrderBy(i => i.SortOrder)
-                .Select(i => new HotelImageDto
-                {
-                    Url = i.Url,
-                    Type = i.Type,
-                    SortOrder = i.SortOrder
-                })
-                .ToList(),
-            Facilities = hotel.HotelFacilities
-                .Select(hf => new FacilityDto
-                {
-                    Name = hf.Facility!.Name,
-                    Icon = hf.Facility.Icon
-                })
-                .ToList(),
-            Nearby = hotel.NearbyPlaces
-                .OrderBy(np => np.DistanceKm)
-                .Select(np => new NearbyPlaceDto
-                {
-                    Name = np.Name,
-                    DistanceKm = np.DistanceKm
-                })
-                .ToList(),
-            RoomTypes = roomTypes
-        };
+        if (room == null)
+            throw new Exception("Room not found");
 
-        await _cache.SetAsync(
-            cacheKey,
-            response,
-            TimeSpan.FromMinutes(_cacheSettings.HotelFullTtlMinutes),
-            cancellationToken);
-
-        return response;
+        return room;
     }
+}
 
-    private static string BuildBenefits(bool includesBreakfast, bool isRefundable, string paymentType)
-    {
-        var benefits = new List<string>();
-        if (includesBreakfast) benefits.Add("Breakfast");
-        if (isRefundable) benefits.Add("Refundable");
-        benefits.Add(paymentType.Equals("pay_at_hotel", StringComparison.OrdinalIgnoreCase)
-            ? "Pay at Hotel"
-            : "Online Payment");
+// =========================
+// DTOs
+// =========================
 
-        return string.Join(", ", benefits);
-    }
+public class HotelSummaryDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = default!;
+    public string City { get; set; } = default!;
 
-    private void ValidateRequest(string branchCode, DateTime checkInDate, DateTime checkOutDate, int adultCount, int childCount)
-    {
-        if (string.IsNullOrWhiteSpace(branchCode))
-            throw new Exception("Branch is required");
+    // 🔥 NEW
+    public string Description { get; set; } = string.Empty;
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+    public string BranchCode { get; set; } = default!;
 
-        var today = DateTime.UtcNow.Date;
-        if (checkInDate < today)
-            throw new Exception("Check-in cannot be in the past");
+    public List<string> Images { get; set; } = new();
+    public List<HotelFacilityDto> Facilities { get; set; } = new();
 
-        if (checkOutDate <= checkInDate)
-            throw new Exception("Invalid date range");
+    // 🔥 NEW
+    public List<NearbyPlaceDto> Nearby { get; set; } = new();
 
-        if ((checkOutDate - checkInDate).Days > _validationSettings.MaxStayNights)
-            throw new Exception($"Maximum stay duration is {_validationSettings.MaxStayNights} nights");
+    public decimal? PriceFrom { get; set; }
+    public string PriceType { get; set; } = "estimate";
+}
 
-        if ((checkInDate - today).Days > _validationSettings.MaxAdvanceBookingDays)
-            throw new Exception($"Check-in cannot be more than {_validationSettings.MaxAdvanceBookingDays} days ahead");
+public class NearbyPlaceDto
+{
+    public string Name { get; set; } = default!;
+    public decimal DistanceKm { get; set; }
+}
 
-        if (adultCount < 1)
-            throw new Exception("At least one adult guest is required");
+public class HotelFacilityDto
+{
+    public string Name { get; set; } = default!;
+    public string Icon { get; set; } = default!;
+}
 
-        if (childCount < 0)
-            throw new Exception("Child guest count cannot be negative");
-    }
+public class RoomPricingDto
+{
+    public Guid RoomTypeId { get; set; }
+    public string Name { get; set; } = default!;
+    public decimal BasePrice { get; set; }
+    public string Image { get; set; } = default!;
+    public bool IsAvailable { get; set; }
+    public decimal LowestPrice { get; set; }
+    public string Description { get; set; } = default!;
+    public decimal Size { get; set; }
+    public string BedType { get; set; } = default!;
+    public int Capacity { get; set; }
+    public int MaxAdults { get; set; }
+    public int MaxChildren { get; set; }
+    public IEnumerable<string> Facilities { get; set; } = new string[0];
+
+    public List<RatePlanSummaryDto> RatePlans { get; set; } = new();
+}
+
+public class RatePlanSummaryDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = default!;
+    public decimal Price { get; set; }
+    public IEnumerable<string> benefits { get; set; } = new string[0];
+    public string TermsPreview { get; set; } = default!;
+}
+
+public class RoomDetailDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = default!;
+    public string Description { get; set; } = default!;
+    public string Image { get; set; } = default!;
+    public List<RatePlanDetailDto> RatePlans { get; set; } = new();
+}
+
+public class RatePlanDetailDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = default!;
+    public decimal Price { get; set; }
+    public string Terms { get; set; } = default!;
 }

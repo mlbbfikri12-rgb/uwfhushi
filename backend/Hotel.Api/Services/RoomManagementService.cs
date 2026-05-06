@@ -3,7 +3,6 @@ using Hotel.Api.Data;
 using Hotel.Api.DTOs;
 using Hotel.Api.Entities.Tenant;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Hotel.Api.Services;
@@ -33,50 +32,119 @@ public class RoomManagementService : IRoomManagementService
         "occupied"
     };
 
-    private readonly AppDbContext _db;
+    private readonly ITenantDbFactory _tenantDbFactory;
     private readonly ICacheService _cache;
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly CacheSettings _cacheSettings;
     private readonly BookingValidationSettings _validationSettings;
 
-    public RoomManagementService(AppDbContext db)
-        : this(
-            db,
-            new NoopCacheService(),
-            new HttpContextAccessor(),
-            Options.Create(new CacheSettings()),
-            Options.Create(new BookingValidationSettings()))
-    {
-    }
-
     public RoomManagementService(
-        AppDbContext db,
+        ITenantDbFactory tenantDbFactory,
         ICacheService cache,
         IHttpContextAccessor httpContextAccessor,
         IOptions<CacheSettings> cacheSettings,
         IOptions<BookingValidationSettings> validationSettings)
     {
-        _db = db;
+        _tenantDbFactory = tenantDbFactory;
         _cache = cache;
         _httpContextAccessor = httpContextAccessor;
         _cacheSettings = cacheSettings.Value;
         _validationSettings = validationSettings.Value;
     }
 
+    // =========================
+    // 🔥 CORE HELPER
+    // =========================
+    private string GetBranchCode()
+    {
+        var branchCode = _httpContextAccessor.HttpContext?.Request.Headers["X-Branch-Code"].ToString();
+
+        if (string.IsNullOrWhiteSpace(branchCode))
+            throw new Exception("X-Branch-Code header is missing");
+
+        return branchCode.Trim().ToUpperInvariant();
+    }
+
+    private async Task<AppDbContext> CreateDbAsync(CancellationToken ct = default)
+    {
+        var branchCode = GetBranchCode();
+        return await _tenantDbFactory.CreateAsync(branchCode, ct);
+    }
+
+    // =========================
+    // ROOM TYPES
+    // =========================
     public async Task<IReadOnlyCollection<RoomTypeResponseDto>> GetRoomTypesAsync()
     {
-        return await _db.RoomTypes
+        await using var db = await CreateDbAsync();
+
+        return await db.RoomTypes
             .AsNoTracking()
-            .OrderBy(rt => rt.Name)
-            .Select(rt => ToRoomTypeDto(rt))
+            .OrderBy(x => x.Name)
+            .Select(x => ToRoomTypeDto(x))
             .ToListAsync();
+    }
+
+    public async Task<bool> DeleteRoomImageAsync(Guid roomId, Guid imageId)
+    {
+        await using var db = await CreateDbAsync();
+
+        var image = await db.RoomImages
+            .FirstOrDefaultAsync(x => x.RoomId == roomId && x.Id == imageId);
+
+        if (image == null)
+            return false;
+
+        db.RoomImages.Remove(image);
+        await db.SaveChangesAsync();
+
+        await InvalidateAvailabilityCacheAsync();
+
+        return true;
+    }
+
+    public async Task<RoomImageResponseDto?> AddRoomImageAsync(Guid roomId, AddRoomImageDto dto)
+    {
+        await using var db = await CreateDbAsync();
+
+        var exists = await db.Rooms.AnyAsync(x => x.Id == roomId);
+        if (!exists)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(dto.Url))
+            throw new Exception("Image URL is required");
+
+        var entity = new RoomImage
+        {
+            Id = Guid.NewGuid(),
+            RoomId = roomId,
+            Url = dto.Url.Trim(),
+            Format = string.IsNullOrWhiteSpace(dto.Format)
+                ? "webp"
+                : dto.Format.Trim().ToLowerInvariant(),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        db.RoomImages.Add(entity);
+        await db.SaveChangesAsync();
+
+        await InvalidateAvailabilityCacheAsync();
+
+        return new RoomImageResponseDto
+        {
+            Id = entity.Id,
+            Url = entity.Url,
+            Format = entity.Format
+        };
     }
 
     public async Task<RoomTypeResponseDto> CreateRoomTypeAsync(CreateRoomTypeDto dto)
     {
+        await using var db = await CreateDbAsync();
+
         ValidateRoomType(dto.Name, dto.BasePrice, dto.MaxAdults, dto.MaxChildren);
 
-        var roomType = new RoomType
+        var entity = new RoomType
         {
             Id = Guid.NewGuid(),
             Name = dto.Name.Trim(),
@@ -87,104 +155,96 @@ public class RoomManagementService : IRoomManagementService
             CreatedAt = DateTime.UtcNow
         };
 
-        _db.RoomTypes.Add(roomType);
-        await _db.SaveChangesAsync();
+        db.RoomTypes.Add(entity);
+        await db.SaveChangesAsync();
+
         await InvalidateAvailabilityCacheAsync();
 
-        return ToRoomTypeDto(roomType);
+        return ToRoomTypeDto(entity);
     }
 
     public async Task<RoomTypeResponseDto?> UpdateRoomTypeAsync(Guid id, UpdateRoomTypeDto dto)
     {
-        ValidateRoomType(dto.Name, dto.BasePrice, dto.MaxAdults, dto.MaxChildren);
+        await using var db = await CreateDbAsync();
 
-        var roomType = await _db.RoomTypes.FirstOrDefaultAsync(rt => rt.Id == id);
-        if (roomType == null)
-            return null;
+        var entity = await db.RoomTypes.FirstOrDefaultAsync(x => x.Id == id);
+        if (entity == null) return null;
 
-        roomType.Name = dto.Name.Trim();
-        roomType.Description = dto.Description.Trim();
-        roomType.BasePrice = dto.BasePrice;
-        roomType.MaxAdults = dto.MaxAdults;
-        roomType.MaxChildren = dto.MaxChildren;
+        entity.Name = dto.Name.Trim();
+        entity.Description = dto.Description.Trim();
+        entity.BasePrice = dto.BasePrice;
+        entity.MaxAdults = dto.MaxAdults;
+        entity.MaxChildren = dto.MaxChildren;
 
-        await _db.SaveChangesAsync();
+        await db.SaveChangesAsync();
         await InvalidateAvailabilityCacheAsync();
 
-        return ToRoomTypeDto(roomType);
+        return ToRoomTypeDto(entity);
     }
 
+    // =========================
+    // ROOMS
+    // =========================
     public async Task<IReadOnlyCollection<RoomResponseDto>> GetRoomsAsync()
     {
-        return await BuildRoomQuery()
-            .OrderBy(r => r.RoomNumber)
+        await using var db = await CreateDbAsync();
+
+        return await db.Rooms
+            .AsNoTracking()
+            .Include(x => x.RoomType)   // 🔥 WAJIB
+            .Include(x => x.Images)     // 🔥 WAJIB kalau dipakai
+            .OrderBy(x => x.RoomNumber)
+            .Select(x => MapRoom(x))
             .ToListAsync();
     }
 
     public async Task<RoomResponseDto?> GetRoomByIdAsync(Guid id)
     {
-        return await BuildRoomQuery()
-            .FirstOrDefaultAsync(r => r.Id == id);
+        await using var db = await CreateDbAsync();
+
+        return await db.Rooms
+            .AsNoTracking()
+            .Include(x => x.RoomType)
+            .Include(x => x.Images)
+            .Where(x => x.Id == id)
+            .Select(x => MapRoom(x))
+            .FirstOrDefaultAsync();
     }
 
     public async Task<RoomResponseDto> CreateRoomAsync(CreateRoomDto dto)
     {
-        var status = NormalizeRoomStatus(dto.Status);
-        var roomNumber = dto.RoomNumber.Trim();
+        await using var db = await CreateDbAsync();
 
-        if (string.IsNullOrWhiteSpace(roomNumber))
-            throw new Exception("Room number is required");
-
-        var roomTypeExists = await _db.RoomTypes.AnyAsync(rt => rt.Id == dto.RoomTypeId);
-        if (!roomTypeExists)
-            throw new Exception("Room type not found");
-
-        var roomExists = await _db.Rooms.AnyAsync(r => r.RoomNumber == roomNumber);
-        if (roomExists)
-            throw new Exception("Room number already exists");
-
-        var room = new Room
+        var entity = new Room
         {
             Id = Guid.NewGuid(),
-            RoomNumber = roomNumber,
+            RoomNumber = dto.RoomNumber.Trim(),
             RoomTypeId = dto.RoomTypeId,
-            Status = status,
+            Status = NormalizeRoomStatus(dto.Status),
             CreatedAt = DateTime.UtcNow
         };
 
-        _db.Rooms.Add(room);
-        await _db.SaveChangesAsync();
+        db.Rooms.Add(entity);
+        await db.SaveChangesAsync();
+
         await InvalidateAvailabilityCacheAsync();
 
-        return await GetRoomByIdAsync(room.Id)
-            ?? throw new Exception("Created room could not be loaded");
+        return await GetRoomByIdAsync(entity.Id)
+            ?? throw new Exception("Room not found");
     }
 
     public async Task<RoomResponseDto?> UpdateRoomAsync(Guid id, UpdateRoomDto dto)
     {
-        var status = NormalizeRoomStatus(dto.Status);
-        var roomNumber = dto.RoomNumber.Trim();
+        await using var db = await CreateDbAsync();
 
-        if (string.IsNullOrWhiteSpace(roomNumber))
-            throw new Exception("Room number is required");
+        var entity = await db.Rooms.FirstOrDefaultAsync(x => x.Id == id);
+        if (entity == null) return null;
 
-        var room = await _db.Rooms.FirstOrDefaultAsync(r => r.Id == id);
-        if (room == null)
-            return null;
+        entity.RoomNumber = dto.RoomNumber.Trim();
+        entity.RoomTypeId = dto.RoomTypeId;
+        entity.Status = NormalizeRoomStatus(dto.Status);
 
-        var duplicate = await _db.Rooms.AnyAsync(r => r.Id != id && r.RoomNumber == roomNumber);
-        if (duplicate)
-            throw new Exception("Room number already exists");
-
-        var roomTypeExists = await _db.RoomTypes.AnyAsync(rt => rt.Id == dto.RoomTypeId);
-        if (!roomTypeExists)
-            throw new Exception("Room type not found");
-
-        room.RoomNumber = roomNumber;
-        room.RoomTypeId = dto.RoomTypeId;
-        room.Status = status;
-
-        await _db.SaveChangesAsync();
+        await db.SaveChangesAsync();
         await InvalidateAvailabilityCacheAsync();
 
         return await GetRoomByIdAsync(id);
@@ -192,277 +252,166 @@ public class RoomManagementService : IRoomManagementService
 
     public async Task<RoomResponseDto?> UpdateRoomStatusAsync(Guid id, string status)
     {
-        var normalizedStatus = NormalizeRoomStatus(status);
-        var room = await _db.Rooms.FirstOrDefaultAsync(r => r.Id == id);
+        await using var db = await CreateDbAsync();
 
-        if (room == null)
-            return null;
+        var entity = await db.Rooms.FirstOrDefaultAsync(x => x.Id == id);
+        if (entity == null) return null;
 
-        room.Status = normalizedStatus;
-        await _db.SaveChangesAsync();
+        entity.Status = NormalizeRoomStatus(status);
+
+        await db.SaveChangesAsync();
         await InvalidateAvailabilityCacheAsync();
 
         return await GetRoomByIdAsync(id);
     }
 
-    public async Task<RoomImageResponseDto?> AddRoomImageAsync(Guid roomId, AddRoomImageDto dto)
-    {
-        var roomExists = await _db.Rooms.AnyAsync(r => r.Id == roomId);
-        if (!roomExists)
-            return null;
-
-        if (string.IsNullOrWhiteSpace(dto.Url))
-            throw new Exception("Image URL is required");
-
-        var image = new RoomImage
-        {
-            Id = Guid.NewGuid(),
-            RoomId = roomId,
-            Url = dto.Url.Trim(),
-            Format = string.IsNullOrWhiteSpace(dto.Format) ? "webp" : dto.Format.Trim().ToLowerInvariant(),
-            CreatedAt = DateTime.UtcNow
-        };
-
-        _db.RoomImages.Add(image);
-        await _db.SaveChangesAsync();
-        await InvalidateAvailabilityCacheAsync();
-
-        return new RoomImageResponseDto
-        {
-            Id = image.Id,
-            Url = image.Url,
-            Format = image.Format
-        };
-    }
-
-    public async Task<bool> DeleteRoomImageAsync(Guid roomId, Guid imageId)
-    {
-        var image = await _db.RoomImages.FirstOrDefaultAsync(i => i.RoomId == roomId && i.Id == imageId);
-        if (image == null)
-            return false;
-
-        _db.RoomImages.Remove(image);
-        await _db.SaveChangesAsync();
-        await InvalidateAvailabilityCacheAsync();
-
-        return true;
-    }
-
+    // =========================
+    // AVAILABILITY
+    // =========================
     public async Task<RoomAvailabilityResponseDto> SetAvailabilityAsync(Guid roomId, UpdateRoomAvailabilityDto dto)
     {
-        var roomExists = await _db.Rooms.AnyAsync(r => r.Id == roomId);
-        if (!roomExists)
-            throw new Exception("Room not found");
+        await using var db = await CreateDbAsync();
 
         var date = DateTime.SpecifyKind(dto.Date.Date, DateTimeKind.Utc);
-        var availability = await _db.RoomAvailabilities
-            .FirstOrDefaultAsync(a => a.RoomId == roomId && a.Date == date);
 
-        if (availability == null)
+        var entity = await db.RoomAvailabilities
+            .FirstOrDefaultAsync(x => x.RoomId == roomId && x.Date == date);
+
+        if (entity == null)
         {
-            availability = new RoomAvailability
+            entity = new RoomAvailability
             {
                 Id = Guid.NewGuid(),
                 RoomId = roomId,
                 Date = date,
                 CreatedAt = DateTime.UtcNow
             };
-            _db.RoomAvailabilities.Add(availability);
+            db.RoomAvailabilities.Add(entity);
         }
 
-        availability.IsAvailable = dto.IsAvailable;
-        await _db.SaveChangesAsync();
+        entity.IsAvailable = dto.IsAvailable;
+
+        await db.SaveChangesAsync();
         await InvalidateAvailabilityCacheAsync();
 
         return new RoomAvailabilityResponseDto
         {
             RoomId = roomId,
             Date = date,
-            IsAvailable = availability.IsAvailable
+            IsAvailable = entity.IsAvailable
         };
     }
 
+    // =========================
+    // SEARCH
+    // =========================
     public async Task<IReadOnlyCollection<RoomResponseDto>> SearchAvailableRoomsAsync(AvailabilitySearchDto dto)
     {
-        var checkInDate = DateTime.SpecifyKind(dto.CheckIn.Date, DateTimeKind.Utc);
-        var checkOutDate = DateTime.SpecifyKind(dto.CheckOut.Date, DateTimeKind.Utc);
+        await using var db = await CreateDbAsync();
 
-        ValidateAvailabilitySearch(checkInDate, checkOutDate, dto.AdultCount, dto.ChildCount);
+        var checkIn = dto.CheckIn.Date;
+        var checkOut = dto.CheckOut.Date;
 
-        var branchCode = GetBranchCode();
-        var cacheKey = $"availability:{branchCode}:{checkInDate:yyyyMMdd}:{checkOutDate:yyyyMMdd}:adult:{dto.AdultCount}:child:{dto.ChildCount}";
-        var cached = await _cache.GetAsync<IReadOnlyCollection<RoomResponseDto>>(cacheKey);
-        if (cached != null)
-            return cached;
+        if (checkOut <= checkIn)
+            throw new Exception("Invalid date range");
 
-        var dates = Enumerable.Range(0, (checkOutDate - checkInDate).Days)
-            .Select(offset => checkInDate.AddDays(offset))
-            .ToList();
-
-        var rooms = await _db.Rooms
+        // =========================
+        // 🔥 STEP 1: ambil roomId yang available (INDEX FRIENDLY)
+        // =========================
+        var availableRoomIds = (await db.Rooms
             .AsNoTracking()
             .Where(r =>
                 r.Status == "available" &&
-                r.RoomType.MaxAdults >= dto.AdultCount &&
-                r.RoomType.MaxChildren >= dto.ChildCount &&
-                !_db.RoomAvailabilities.Any(a =>
+                !db.RoomAvailabilities.Any(a =>
                     a.RoomId == r.Id &&
-                    dates.Contains(a.Date) &&
+                    a.Date >= checkIn &&
+                    a.Date < checkOut &&
                     !a.IsAvailable))
-            .OrderBy(r => r.RoomType.BasePrice)
-            .ThenBy(r => r.RoomNumber)
-            .Select(r => new RoomResponseDto
-            {
-                Id = r.Id,
-                RoomNumber = r.RoomNumber,
-                Status = r.Status,
-                RoomType = new RoomTypeResponseDto
-                {
-                    Id = r.RoomType.Id,
-                    Name = r.RoomType.Name,
-                    Description = r.RoomType.Description,
-                    BasePrice = r.RoomType.BasePrice,
-                    MaxAdults = r.RoomType.MaxAdults,
-                    MaxChildren = r.RoomType.MaxChildren
-                },
-                Images = r.Images
-                    .Select(i => new RoomImageResponseDto
-                    {
-                        Id = i.Id,
-                        Url = i.Url,
-                        Format = i.Format
-                    })
-                    .ToList()
-            })
-            .ToListAsync();
+            .Select(r => r.Id)
+            .ToListAsync())
+            .ToHashSet(); // 🔥 O(1)
 
-        await _cache.SetAsync(
-            cacheKey,
-            rooms,
-            TimeSpan.FromMinutes(_cacheSettings.AvailabilityTtlMinutes));
+        // =========================
+        // 🔥 STEP 2: ambil room detail
+        // =========================
+        var rooms = await db.Rooms
+            .AsNoTracking()
+            .Include(x => x.RoomType)
+            .Include(x => x.Images)
+            .Where(r => availableRoomIds.Contains(r.Id))
+            .Select(r => MapRoom(r))
+            .ToListAsync();
 
         return rooms;
     }
 
-    private IQueryable<RoomResponseDto> BuildRoomQuery()
+    // =========================
+    // MAPPERS
+    // =========================
+    private static RoomResponseDto MapRoom(Room r)
     {
-        return _db.Rooms
-            .AsNoTracking()
-            .Select(r => new RoomResponseDto
-            {
-                Id = r.Id,
-                RoomNumber = r.RoomNumber,
-                Status = r.Status,
-                RoomType = new RoomTypeResponseDto
-                {
-                    Id = r.RoomType.Id,
-                    Name = r.RoomType.Name,
-                    Description = r.RoomType.Description,
-                    BasePrice = r.RoomType.BasePrice,
-                    MaxAdults = r.RoomType.MaxAdults,
-                    MaxChildren = r.RoomType.MaxChildren
-                },
-                Images = r.Images
-                    .Select(i => new RoomImageResponseDto
-                    {
-                        Id = i.Id,
-                        Url = i.Url,
-                        Format = i.Format
-                    })
-                    .ToList()
-            });
-    }
+        if (r.RoomType == null)
+            throw new Exception("RoomType not loaded");
 
-    private static RoomResponseDto ToRoomDto(Room room)
-    {
         return new RoomResponseDto
         {
-            Id = room.Id,
-            RoomNumber = room.RoomNumber,
-            Status = room.Status,
-            RoomType = ToRoomTypeDto(room.RoomType),
-            Images = room.Images
+            Id = r.Id,
+            RoomNumber = r.RoomNumber,
+            Status = r.Status,
+
+            RoomType = new RoomTypeResponseDto
+            {
+                Id = r.RoomType.Id,
+                Name = r.RoomType.Name,
+                Description = r.RoomType.Description,
+                BasePrice = r.RoomType.BasePrice,
+                MaxAdults = r.RoomType.MaxAdults,
+                MaxChildren = r.RoomType.MaxChildren
+            },
+
+            Images = r.Images?
                 .Select(i => new RoomImageResponseDto
                 {
                     Id = i.Id,
                     Url = i.Url,
                     Format = i.Format
                 })
-                .ToList()
+                .ToList() ?? new List<RoomImageResponseDto>()
         };
     }
-
-    private static RoomTypeResponseDto ToRoomTypeDto(RoomType roomType)
+    private static RoomTypeResponseDto ToRoomTypeDto(RoomType rt)
     {
         return new RoomTypeResponseDto
         {
-            Id = roomType.Id,
-            Name = roomType.Name,
-            Description = roomType.Description,
-            BasePrice = roomType.BasePrice,
-            MaxAdults = roomType.MaxAdults,
-            MaxChildren = roomType.MaxChildren
+            Id = rt.Id,
+            Name = rt.Name,
+            Description = rt.Description,
+            BasePrice = rt.BasePrice,
+            MaxAdults = rt.MaxAdults,
+            MaxChildren = rt.MaxChildren
         };
-    }
-
-    private static void ValidateRoomType(string name, decimal basePrice, int maxAdults, int maxChildren)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            throw new Exception("Room type name is required");
-
-        if (basePrice <= 0)
-            throw new Exception("Base price must be greater than zero");
-
-        if (maxAdults < 1)
-            throw new Exception("Max adults must be at least one");
-
-        if (maxChildren < 0)
-            throw new Exception("Max children cannot be negative");
     }
 
     private static string NormalizeRoomStatus(string status)
     {
-        var normalizedStatus = status.Trim().ToLowerInvariant();
-        if (!AllowedRoomStatuses.Contains(normalizedStatus))
-            throw new Exception("Room status must be available, maintenance, or occupied");
-
-        return normalizedStatus;
-    }
-
-    private void ValidateAvailabilitySearch(DateTime checkInDate, DateTime checkOutDate, int adultCount, int childCount)
-    {
-        var today = DateTime.UtcNow.Date;
-        if (checkInDate < today)
-            throw new Exception("Check-in cannot be in the past");
-
-        if (checkOutDate <= checkInDate)
-            throw new Exception("Invalid date range");
-
-        if ((checkOutDate - checkInDate).Days > _validationSettings.MaxStayNights)
-            throw new Exception($"Maximum stay duration is {_validationSettings.MaxStayNights} nights");
-
-        if ((checkInDate - today).Days > _validationSettings.MaxAdvanceBookingDays)
-            throw new Exception($"Check-in cannot be more than {_validationSettings.MaxAdvanceBookingDays} days ahead");
-
-        if (adultCount < 1)
-            throw new Exception("At least one adult guest is required");
-
-        if (childCount < 0)
-            throw new Exception("Child guest count cannot be negative");
-    }
-
-    private string GetBranchCode()
-    {
-        var branchCode = _httpContextAccessor.HttpContext?.Request.Headers["X-Branch-Code"].ToString();
-        if (string.IsNullOrWhiteSpace(branchCode))
-            return "unknown";
-
-        return branchCode.Trim().ToUpperInvariant();
+        var s = status.Trim().ToLowerInvariant();
+        if (!AllowedRoomStatuses.Contains(s))
+            throw new Exception("Invalid room status");
+        return s;
     }
 
     private Task InvalidateAvailabilityCacheAsync()
     {
         var branchCode = GetBranchCode();
         return _cache.RemoveByPrefixAsync($"availability:{branchCode}:");
+    }
+
+    private static void ValidateRoomType(string name, decimal price, int adult, int child)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new Exception("Name required");
+
+        if (price <= 0)
+            throw new Exception("Price must > 0");
     }
 }

@@ -20,7 +20,13 @@ public class AdminController : ControllerBase
     [HttpPost("seed")]
     public async Task<IActionResult> SeedTenant(CancellationToken cancellationToken)
     {
-        await _tenantSeedService.SeedOtaDummyDataAsync(cancellationToken);
+        var branchCode = HttpContext.Request.Headers["X-Branch-Code"].ToString();
+
+        if (string.IsNullOrWhiteSpace(branchCode))
+            return BadRequest(new { error = "X-Branch-Code header is required" });
+
+        await _tenantSeedService.SeedOtaDummyDataAsync(branchCode, cancellationToken);
+
         return Ok(new { message = "Tenant OTA dummy data seeded successfully" });
     }
 }

@@ -13,6 +13,7 @@ public class Room
     // available | maintenance | occupied
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public ICollection<RoomAvailability> Availabilities { get; set; } = new List<RoomAvailability>();
 
     public ICollection<Booking> Bookings { get; set; } = new List<Booking>();
 

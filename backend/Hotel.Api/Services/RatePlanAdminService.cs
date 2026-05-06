@@ -15,16 +15,49 @@ public interface IRatePlanAdminService
 
 public class RatePlanAdminService : IRatePlanAdminService
 {
-    private readonly AppDbContext _db;
+    private readonly ITenantDbFactory _tenantDbFactory;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public RatePlanAdminService(AppDbContext db) => _db = db;
-
-    public async Task<IReadOnlyCollection<RatePlanAdminDto>> GetByRoomTypeAsync(Guid roomTypeId, CancellationToken cancellationToken = default)
+    public RatePlanAdminService(
+        ITenantDbFactory tenantDbFactory,
+        IHttpContextAccessor httpContextAccessor)
     {
-        var exists = await _db.RoomTypes.AnyAsync(x => x.Id == roomTypeId, cancellationToken);
-        if (!exists) throw new Exception("Room type not found");
+        _tenantDbFactory = tenantDbFactory;
+        _httpContextAccessor = httpContextAccessor;
+    }
 
-        return await _db.RatePlans
+    private string GetBranchCode()
+    {
+        var branchCode = _httpContextAccessor.HttpContext?.Request.Headers["X-Branch-Code"].ToString();
+
+        if (string.IsNullOrWhiteSpace(branchCode))
+            throw new Exception("X-Branch-Code header is missing");
+
+        return branchCode.Trim().ToUpperInvariant();
+    }
+
+    private async Task<AppDbContext> CreateDbAsync(CancellationToken ct = default)
+    {
+        var branchCode = GetBranchCode();
+        return await _tenantDbFactory.CreateAsync(branchCode, ct);
+    }
+
+    // =========================
+    // GET
+    // =========================
+    public async Task<IReadOnlyCollection<RatePlanAdminDto>> GetByRoomTypeAsync(
+        Guid roomTypeId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await CreateDbAsync(cancellationToken);
+
+        var exists = await db.RoomTypes
+            .AnyAsync(x => x.Id == roomTypeId, cancellationToken);
+
+        if (!exists)
+            throw new Exception("Room type not found");
+
+        return await db.RatePlans
             .AsNoTracking()
             .Where(x => x.RoomTypeId == roomTypeId)
             .OrderBy(x => x.Price)
@@ -43,9 +76,17 @@ public class RatePlanAdminService : IRatePlanAdminService
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<RatePlanAdminDto> CreateAsync(Guid roomTypeId, UpsertRatePlanDto dto, CancellationToken cancellationToken = default)
+    // =========================
+    // CREATE
+    // =========================
+    public async Task<RatePlanAdminDto> CreateAsync(
+        Guid roomTypeId,
+        UpsertRatePlanDto dto,
+        CancellationToken cancellationToken = default)
     {
-        await ValidateInputAsync(roomTypeId, dto, null, cancellationToken);
+        await using var db = await CreateDbAsync(cancellationToken);
+
+        await ValidateInputAsync(db, roomTypeId, dto, null, cancellationToken);
 
         var entity = new RatePlan
         {
@@ -60,17 +101,29 @@ public class RatePlanAdminService : IRatePlanAdminService
             IsActive = dto.IsActive
         };
 
-        _db.RatePlans.Add(entity);
-        await _db.SaveChangesAsync(cancellationToken);
+        db.RatePlans.Add(entity);
+        await db.SaveChangesAsync(cancellationToken);
+
         return Map(entity);
     }
 
-    public async Task<RatePlanAdminDto?> UpdateAsync(Guid id, UpsertRatePlanDto dto, CancellationToken cancellationToken = default)
+    // =========================
+    // UPDATE
+    // =========================
+    public async Task<RatePlanAdminDto?> UpdateAsync(
+        Guid id,
+        UpsertRatePlanDto dto,
+        CancellationToken cancellationToken = default)
     {
-        var entity = await _db.RatePlans.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
-        if (entity == null) return null;
+        await using var db = await CreateDbAsync(cancellationToken);
 
-        await ValidateInputAsync(entity.RoomTypeId, dto, id, cancellationToken);
+        var entity = await db.RatePlans
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+        if (entity == null)
+            return null;
+
+        await ValidateInputAsync(db, entity.RoomTypeId, dto, id, cancellationToken);
 
         entity.Name = dto.Name.Trim();
         entity.Price = dto.Price;
@@ -80,35 +133,60 @@ public class RatePlanAdminService : IRatePlanAdminService
         entity.TermsConditions = dto.TermsConditions.Trim();
         entity.IsActive = dto.IsActive;
 
-        await _db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
         return Map(entity);
     }
 
-    public async Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+    // =========================
+    // DELETE
+    // =========================
+    public async Task<bool> DeleteAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
     {
-        var entity = await _db.RatePlans.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
-        if (entity == null) return false;
-        _db.RatePlans.Remove(entity);
-        await _db.SaveChangesAsync(cancellationToken);
+        await using var db = await CreateDbAsync(cancellationToken);
+
+        var entity = await db.RatePlans
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+        if (entity == null)
+            return false;
+
+        db.RatePlans.Remove(entity);
+        await db.SaveChangesAsync(cancellationToken);
+
         return true;
     }
 
-    private async Task ValidateInputAsync(Guid roomTypeId, UpsertRatePlanDto dto, Guid? id, CancellationToken cancellationToken)
+    // =========================
+    // VALIDATION
+    // =========================
+    private async Task ValidateInputAsync(
+        AppDbContext db,
+        Guid roomTypeId,
+        UpsertRatePlanDto dto,
+        Guid? id,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(dto.Name))
             throw new Exception("Rate plan name is required");
+
         if (dto.Price <= 0)
             throw new Exception("Rate plan price must be greater than 0");
 
-        var roomTypeExists = await _db.RoomTypes.AnyAsync(x => x.Id == roomTypeId, cancellationToken);
+        var roomTypeExists = await db.RoomTypes
+            .AnyAsync(x => x.Id == roomTypeId, cancellationToken);
+
         if (!roomTypeExists)
             throw new Exception("Room type not found");
 
         var paymentType = dto.PaymentType.Trim().ToLowerInvariant();
+
         if (paymentType != "online" && paymentType != "pay_at_hotel")
             throw new Exception("Payment type must be online or pay_at_hotel");
 
-        var duplicate = await _db.RatePlans.AnyAsync(
+        var duplicate = await db.RatePlans.AnyAsync(
             x => x.Id != id &&
                  x.RoomTypeId == roomTypeId &&
                  x.Name.ToLower() == dto.Name.Trim().ToLower(),

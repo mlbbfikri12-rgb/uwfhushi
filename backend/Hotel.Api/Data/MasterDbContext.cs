@@ -21,6 +21,8 @@ public class MasterDbContext : DbContext
     public DbSet<HotelFacility> HotelFacilities => Set<HotelFacility>();
     public DbSet<NearbyPlace> NearbyPlaces => Set<NearbyPlace>();
     public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
+    public DbSet<HotelPriceSummary> HotelPriceSummaries => Set<HotelPriceSummary>();
+    public DbSet<EmailVerificationToken> EmailVerificationTokens => Set<EmailVerificationToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -111,5 +113,20 @@ public class MasterDbContext : DbContext
             .HasOne(sb => sb.Branch)
             .WithMany(b => b.StaffBranches)
             .HasForeignKey(sb => sb.BranchId);
+
+        modelBuilder.Entity<HotelPriceSummary>()
+            .HasIndex(x => x.Slug)
+            .IsUnique();
+
+        modelBuilder.Entity<CustomerGlobal>()
+.HasIndex(c => new { c.Email, c.IsVerified });
+        modelBuilder.Entity<EmailVerificationToken>()
+            .HasIndex(x => x.Token)
+            .IsUnique();
+
+        modelBuilder.Entity<EmailVerificationToken>()
+            .HasIndex(x => x.CustomerId);
+        modelBuilder.Entity<EmailVerificationToken>()
+.HasIndex(x => x.ExpiredAt);
     }
 }

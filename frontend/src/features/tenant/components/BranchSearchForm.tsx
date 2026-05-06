@@ -32,13 +32,20 @@ type SearchValues = z.infer<typeof searchSchema>;
 
 type Props = {
   branch?: string;
+  initialKeyword?: string;
+  hideSearchButton?: boolean;
 };
 
-export function BranchSearchForm({ branch }: Props) {
+export function BranchSearchForm({
+  branch,
+  initialKeyword,
+  hideSearchButton = false,
+}: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [keyword, setKeyword] = useState("");
+  const [isUserTyping, setIsUserTyping] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<PublicBranch | null>(
     null,
   );
@@ -49,7 +56,9 @@ export function BranchSearchForm({ branch }: Props) {
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const calendarRef = useRef<HTMLDivElement>(null);
 
-  const { data, isFetching } = useBranchSearchQuery(keyword);
+  const { data, isFetching } = useBranchSearchQuery(
+    isUserTyping ? keyword : "", // 🔥 hanya query kalau user typing
+  );
 
   const { handleSubmit, setValue, watch } = useForm<SearchValues>({
     resolver: zodResolver(searchSchema),
@@ -108,9 +117,11 @@ export function BranchSearchForm({ branch }: Props) {
   useEffect(() => {
     if (branch) {
       setValue("branchCode", branch);
-      setKeyword(branch);
     }
-  }, [branch, setValue]);
+    if (initialKeyword) {
+      setKeyword(initialKeyword);
+    }
+  }, [branch, initialKeyword, setValue]);
 
   const nights =
     dateRange?.from && dateRange?.to
@@ -168,6 +179,7 @@ export function BranchSearchForm({ branch }: Props) {
                   setKeyword(e.target.value);
                   setSelectedBranch(null);
                   setValue("branchCode", "");
+                  setIsUserTyping(true);
                 }}
                 placeholder="City, hotel name..."
                 className="w-full text-sm font-medium text-slate-800 placeholder:text-slate-400 bg-transparent outline-none"
@@ -175,7 +187,8 @@ export function BranchSearchForm({ branch }: Props) {
             </div>
           </div>
 
-          {!isFetching &&
+          {isUserTyping &&
+            !isFetching &&
             data &&
             data.length > 0 &&
             !selectedBranch &&
@@ -308,15 +321,17 @@ export function BranchSearchForm({ branch }: Props) {
         </div>
 
         {/* ── BUTTON ── */}
-        <div className="px-4 py-4 flex items-center justify-center lg:justify-end shrink-0">
-          <button
-            type="submit"
-            className="flex items-center gap-2 bg-[#1a1f3c] hover:bg-[#252c52] active:scale-95 text-white text-sm font-bold px-7 py-4 rounded-xl transition-all whitespace-nowrap w-full lg:w-auto justify-center"
-          >
-            <Search size={16} />
-            Search Hotels
-          </button>
-        </div>
+        {!hideSearchButton && ( // 🔥 SATU-SATUNYA PERUBAHAN UI
+          <div className="px-4 py-4 flex items-center justify-center lg:justify-end shrink-0">
+            <button
+              type="submit"
+              className="flex items-center gap-2 bg-[#1a1f3c] hover:bg-[#252c52] active:scale-95 text-white text-sm font-bold px-7 py-4 rounded-xl transition-all whitespace-nowrap w-full lg:w-auto justify-center"
+            >
+              <Search size={16} />
+              Search Hotels
+            </button>
+          </div>
+        )}
       </div>
     </form>
   );

@@ -16,11 +16,21 @@ public class PaymentController : ControllerBase
     }
 
     [HttpPost("midtrans/webhook")]
-    public async Task<IActionResult> MidtransWebhook([FromBody] MidtransWebhookDto dto)
+    public async Task<IActionResult> MidtransWebhook(
+    [FromBody] MidtransWebhookDto dto,
+    CancellationToken ct)
     {
         try
         {
-            var payment = await _paymentService.HandleMidtransWebhookAsync(dto);
+            var branchCode = Request.Headers["X-Branch-Code"].ToString();
+
+            if (string.IsNullOrWhiteSpace(branchCode))
+                return BadRequest(new { error = "X-Branch-Code header is required" });
+
+            var payment = await _paymentService.HandleMidtransWebhookAsync(
+                branchCode,
+                dto,
+                ct);
 
             return Ok(new
             {

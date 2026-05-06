@@ -3,28 +3,30 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { updateRoomStatus } from "@/services/admin.service";
 import { toast } from "sonner";
-import type { Room } from "@/types/room";
+import { AdminRoom } from "@/types/admin-room";
+
+type RoomStatus = "available" | "maintenance" | "occupied";
 
 export function RoomTable({
   rooms,
   isLoading,
 }: {
-  rooms: Room[];
+  rooms: AdminRoom[];
   isLoading: boolean;
 }) {
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: NonNullable<Room["status"]> }) =>
+    mutationFn: ({ id, status }: { id: string; status: RoomStatus }) =>
       updateRoomStatus(id, status),
 
-    // 🔥 OPTIMISTIC UPDATE
+    // 🔥 OPTIMISTIC UPDATE (FIX: pakai AdminRoom, bukan Room)
     onMutate: async ({ id, status }) => {
       await queryClient.cancelQueries({ queryKey: ["rooms"] });
 
-      const prev = queryClient.getQueryData<Room[]>(["rooms"]);
+      const prev = queryClient.getQueryData<AdminRoom[]>(["rooms"]);
 
-      queryClient.setQueryData(["rooms"], (old: Room[] | undefined) =>
+      queryClient.setQueryData(["rooms"], (old: AdminRoom[] | undefined) =>
         old?.map((room) => (room.id === id ? { ...room, status } : room)),
       );
 
@@ -47,7 +49,7 @@ export function RoomTable({
     },
   });
 
-  const badge = (status: NonNullable<Room["status"]>) => {
+  const badge = (status: RoomStatus) => {
     if (status === "available") return "bg-green-100 text-green-700";
     if (status === "maintenance") return "bg-yellow-100 text-yellow-700";
     return "bg-red-100 text-red-700";
@@ -75,15 +77,20 @@ export function RoomTable({
             <tr key={room.id} className="border-t">
               <td className="px-4 py-3 font-medium">{room.roomNumber}</td>
 
-              <td className="px-4 py-3">{room.roomType.name}</td>
+              {/* 🔥 FIX: null safe */}
+              <td className="px-4 py-3">{room.roomType?.name ?? "-"}</td>
 
               <td className="px-4 py-3 text-[#c4a661] font-semibold">
-                Rp {room.roomType.basePrice.toLocaleString("id-ID")}
+                {room.roomType
+                  ? `Rp ${room.roomType.basePrice.toLocaleString("id-ID")}`
+                  : "-"}
               </td>
 
               <td className="px-4 py-3">
                 <span
-                  className={`px-2 py-1 rounded text-xs ${badge(room.status!)}`}
+                  className={`px-2 py-1 rounded text-xs ${badge(
+                    (room.status ?? "available") as RoomStatus,
+                  )}`}
                 >
                   {room.status ?? "available"}
                 </span>
@@ -95,7 +102,7 @@ export function RoomTable({
                   onChange={(e) =>
                     mutation.mutate({
                       id: room.id,
-                      status: e.target.value as NonNullable<Room["status"]>,
+                      status: e.target.value as RoomStatus,
                     })
                   }
                   className="border rounded px-2 py-1 text-xs"

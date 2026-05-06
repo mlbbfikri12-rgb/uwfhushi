@@ -27,7 +27,8 @@ public class AppDbContext : DbContext
         // CUSTOMER
         // ======================
         modelBuilder.Entity<Customer>()
-            .HasIndex(c => c.GlobalCustomerId);
+.HasIndex(c => c.GlobalCustomerId)
+.IsUnique();
 
         modelBuilder.Entity<Customer>()
             .HasIndex(c => c.Email);
@@ -38,6 +39,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Booking>()
             .HasIndex(b => b.CustomerId);
 
+
         modelBuilder.Entity<Booking>()
             .HasIndex(b => b.RoomId);
 
@@ -47,6 +49,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Booking>()
             .HasIndex(b => b.BookingCode)
             .IsUnique();
+        modelBuilder.Entity<Booking>()
+.HasIndex(b => new { b.Status, b.CheckIn });
 
         // ======================
         // ROOM
@@ -131,6 +135,25 @@ public class AppDbContext : DbContext
             .HasOne(i => i.RatePlan)
             .WithMany()
             .HasForeignKey(i => i.RatePlanId);
+
+        modelBuilder.Entity<RoomAvailability>()
+            .HasIndex(a => new { a.RoomId, a.Date, a.IsAvailable })
+            .HasDatabaseName("idx_room_availability_lookup");
+
+        modelBuilder.Entity<RoomAvailability>()
+            .HasOne(a => a.Room)
+            .WithMany(r => r.Availabilities)
+            .HasForeignKey(a => a.RoomId);
+
+        modelBuilder.Entity<RoomType>()
+.HasIndex(rt => rt.Name);
+        modelBuilder.Entity<RoomTypeFacility>()
+            .HasIndex(rtf => new { rtf.RoomTypeId, rtf.Name })
+             .HasDatabaseName("idx_roomtype_facility_lookup")
+             .IsUnique();
+
+        modelBuilder.Entity<RatePlan>()
+            .HasIndex(rp => new { rp.RoomTypeId, rp.IsActive });
     }
 
 

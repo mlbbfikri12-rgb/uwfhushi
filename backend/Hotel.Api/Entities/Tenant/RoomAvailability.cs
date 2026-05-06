@@ -6,6 +6,8 @@ public class RoomAvailability
 
     public Guid RoomId { get; set; }
 
+    public Room Room { get; set; } = default!; // 🔥 ADD THIS
+
     public DateTime Date { get; set; }
 
     public bool IsAvailable { get; set; } = true;

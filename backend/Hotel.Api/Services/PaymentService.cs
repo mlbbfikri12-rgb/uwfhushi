@@ -7,22 +7,35 @@ namespace Hotel.Api.Services;
 
 public interface IPaymentService
 {
-    Task<Payment> HandleMidtransWebhookAsync(MidtransWebhookDto dto);
+    Task<Payment> HandleMidtransWebhookAsync(
+        string branchCode, // 🔥 WAJIB: webhook harus kirim ini
+        MidtransWebhookDto dto,
+        CancellationToken ct = default);
 }
 
 public class PaymentService : IPaymentService
 {
-    private readonly AppDbContext _db;
+    private readonly ITenantDbFactory _tenantDbFactory;
 
-    public PaymentService(AppDbContext db)
+    public PaymentService(ITenantDbFactory tenantDbFactory)
     {
-        _db = db;
+        _tenantDbFactory = tenantDbFactory;
     }
 
-    public async Task<Payment> HandleMidtransWebhookAsync(MidtransWebhookDto dto)
+    public async Task<Payment> HandleMidtransWebhookAsync(
+    string branchCode,
+    MidtransWebhookDto dto,
+    CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(branchCode))
+            throw new Exception("BranchCode is required");
+
+        branchCode = branchCode.Trim().ToUpperInvariant();
+
+        await using var _db = await _tenantDbFactory.CreateAsync(branchCode, ct);
+
         var booking = await _db.Bookings
-            .FirstOrDefaultAsync(b => b.BookingCode == dto.OrderId);
+            .FirstOrDefaultAsync(b => b.BookingCode == dto.OrderId, ct);
 
         if (booking == null)
             throw new Exception("Booking not found");
@@ -30,7 +43,7 @@ public class PaymentService : IPaymentService
         var mappedStatus = MapMidtransStatus(dto.TransactionStatus);
 
         var payment = await _db.Payments
-            .FirstOrDefaultAsync(p => p.BookingId == booking.Id);
+            .FirstOrDefaultAsync(p => p.BookingId == booking.Id, ct);
 
         if (payment == null)
         {
@@ -52,24 +65,31 @@ public class PaymentService : IPaymentService
         booking.PaymentMethod = dto.PaymentType;
         booking.PaymentStatus = mappedStatus;
 
+        // =========================
+        // 🔥 SUCCESS PAYMENT
+        // =========================
         if (mappedStatus == "paid")
         {
             booking.Status = "paid";
             booking.PaidAt = payment.PaidAt;
         }
+        // =========================
+        // 🔥 FAILED PAYMENT (OPTIMIZED)
+        // =========================
         else if (mappedStatus == "failed")
         {
             booking.Status = "cancelled";
 
-            var checkInDate = DateTime.SpecifyKind(booking.CheckIn.Date, DateTimeKind.Utc);
-            var checkOutDate = DateTime.SpecifyKind(booking.CheckOut.Date, DateTimeKind.Utc);
-            var dates = Enumerable.Range(0, (checkOutDate - checkInDate).Days)
-                .Select(offset => checkInDate.AddDays(offset))
-                .ToList();
+            var checkIn = booking.CheckIn.Date;
+            var checkOut = booking.CheckOut.Date;
 
+            // 🔥 INDEX-FRIENDLY QUERY (NO Contains)
             var availabilities = await _db.RoomAvailabilities
-                .Where(a => a.RoomId == booking.RoomId && dates.Contains(a.Date))
-                .ToListAsync();
+                .Where(a =>
+                    a.RoomId == booking.RoomId &&
+                    a.Date >= checkIn &&
+                    a.Date < checkOut)
+                .ToListAsync(ct);
 
             foreach (var availability in availabilities)
             {
@@ -77,11 +97,10 @@ public class PaymentService : IPaymentService
             }
         }
 
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(ct);
 
         return payment;
     }
-
     private static string MapMidtransStatus(string status)
     {
         return status.Trim().ToLowerInvariant() switch
