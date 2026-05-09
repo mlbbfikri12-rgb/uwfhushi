@@ -78,11 +78,7 @@ export default function HotelPageClient({
   // 🔥 DEFINE roomTypes DULU (IMPORTANT FIX)
   // =========================
   const roomTypes = useMemo<UIRoomType[]>(() => {
-    console.log(pricingQuery.status);
-    console.log(pricingQuery.error);
-    console.log(pricingQuery.data);
     if (!pricingQuery.data) {
-      console.log("aneh");
       return [];
     }
 
