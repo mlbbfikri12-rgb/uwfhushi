@@ -5,6 +5,7 @@ public class RoomResponseDto
     public Guid Id { get; set; }
     public string RoomNumber { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public string OperationalStatus { get; set; } = string.Empty;
     public RoomTypeResponseDto RoomType { get; set; } = new();
     public IReadOnlyCollection<RoomImageResponseDto> Images { get; set; } = Array.Empty<RoomImageResponseDto>();
 }
@@ -26,6 +27,11 @@ public class UpdateRoomDto
 public class UpdateRoomStatusDto
 {
     public string Status { get; set; } = "available";
+}
+
+public class UpdateRoomOperationalStatusDto
+{
+    public string OperationalStatus { get; set; } = "clean";
 }
 
 public class RoomImageResponseDto

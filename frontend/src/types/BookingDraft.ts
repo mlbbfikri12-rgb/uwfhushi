@@ -1,21 +1,53 @@
+// export type BookingDraftItem = {
+//     roomTypeId: string;
+//     ratePlanId: string;
+//     roomId?: string;
+
+//     roomTypeName?: string;
+//     ratePlanName?: string;
+
+//     slug: string;
+
+//     checkIn: string;
+//     checkOut: string;
+//     imageUrl?: string;
+
+//     totalRooms: number;
+//     price?: number;
+// };
+
+// export type BookingDraft = {
+//     items: BookingDraftItem[];
+// };
+
+export type BookingDraft = {
+    slug: string;
+    checkIn: string;
+    checkOut: string;
+
+    items: BookingDraftItem[];
+};
+
 export type BookingDraftItem = {
     roomTypeId: string;
     ratePlanId: string;
-    roomId?: string;
 
     roomTypeName?: string;
     ratePlanName?: string;
 
-    slug: string;
-
-    checkIn: string;
-    checkOut: string;
     imageUrl?: string;
 
-    totalRooms: number;
+    qty: number;
     price?: number;
+    MaxAdults?: number;
+    MaxChildren?: number;
+
+    isBreakFast?: boolean;
+    isRefundable?: boolean;
 };
 
-export type BookingDraft = {
-    items: BookingDraftItem[];
+export type SelectedItem = {
+    roomTypeId: string;
+    ratePlanId: string;
+    qty: number;
 };

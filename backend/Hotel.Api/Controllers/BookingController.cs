@@ -40,7 +40,8 @@ public class BookingController : ControllerBase
             var booking = isCustomerSession
                 ? await _bookingService.CreateBookingForCustomerAsync(
                     customerGlobalId,
-                    dto.RoomId,
+                    dto.RoomTypeId,
+                    dto.RatePlanId,
                     dto.CheckIn,
                     dto.CheckOut,
                     dto.AdultCount,
@@ -49,7 +50,8 @@ public class BookingController : ControllerBase
                     dto.Notes
                 )
                 : await _bookingService.CreateBookingAsync(
-                    dto.RoomId,
+                    dto.RoomTypeId,
+                    dto.RatePlanId,
                     dto.CustomerName,
                     dto.CustomerEmail,
                     dto.CustomerPhone,
@@ -65,6 +67,7 @@ public class BookingController : ControllerBase
             {
                 message = "Booking created",
                 bookingId = booking.Id,
+                bookingGroupCode = booking.BookingGroup?.GroupCode,
                 bookingCode = booking.BookingCode,
                 totalPrice = booking.TotalPrice
             });

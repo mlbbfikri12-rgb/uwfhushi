@@ -17,6 +17,10 @@ public interface IRoomManagementService
     Task<RoomResponseDto> CreateRoomAsync(CreateRoomDto dto);
     Task<RoomResponseDto?> UpdateRoomAsync(Guid id, UpdateRoomDto dto);
     Task<RoomResponseDto?> UpdateRoomStatusAsync(Guid id, string status);
+    Task<RoomResponseDto?> UpdateRoomOperationalStatusAsync(Guid id, string operationalStatus);
+    Task<RoomResponseDto?> MarkRoomCheckedOutAsync(Guid id);
+    Task<RoomResponseDto?> MarkRoomCleaningAsync(Guid id);
+    Task<RoomResponseDto?> MarkRoomCleanAsync(Guid id);
     Task<RoomImageResponseDto?> AddRoomImageAsync(Guid roomId, AddRoomImageDto dto);
     Task<bool> DeleteRoomImageAsync(Guid roomId, Guid imageId);
     Task<RoomAvailabilityResponseDto> SetAvailabilityAsync(Guid roomId, UpdateRoomAvailabilityDto dto);
@@ -221,6 +225,7 @@ public class RoomManagementService : IRoomManagementService
             RoomNumber = dto.RoomNumber.Trim(),
             RoomTypeId = dto.RoomTypeId,
             Status = NormalizeRoomStatus(dto.Status),
+            OperationalStatus = RoomOperationalStatuses.Clean,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -259,6 +264,66 @@ public class RoomManagementService : IRoomManagementService
 
         entity.Status = NormalizeRoomStatus(status);
 
+        await db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
+
+        return await GetRoomByIdAsync(id);
+    }
+
+    public async Task<RoomResponseDto?> UpdateRoomOperationalStatusAsync(Guid id, string operationalStatus)
+    {
+        await using var db = await CreateDbAsync();
+
+        var entity = await db.Rooms.FirstOrDefaultAsync(x => x.Id == id);
+        if (entity == null) return null;
+
+        entity.OperationalStatus = NormalizeOperationalStatus(operationalStatus);
+        await db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
+
+        return await GetRoomByIdAsync(id);
+    }
+
+    public async Task<RoomResponseDto?> MarkRoomCheckedOutAsync(Guid id)
+    {
+        await using var db = await CreateDbAsync();
+        var entity = await db.Rooms.FirstOrDefaultAsync(x => x.Id == id);
+        if (entity == null) return null;
+
+        entity.Status = "available";
+        entity.OperationalStatus = RoomOperationalStatuses.Dirty;
+        await db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
+
+        return await GetRoomByIdAsync(id);
+    }
+
+    public async Task<RoomResponseDto?> MarkRoomCleaningAsync(Guid id)
+    {
+        await using var db = await CreateDbAsync();
+        var entity = await db.Rooms.FirstOrDefaultAsync(x => x.Id == id);
+        if (entity == null) return null;
+
+        if (!string.Equals(entity.OperationalStatus, RoomOperationalStatuses.Dirty, StringComparison.OrdinalIgnoreCase))
+            throw new Exception("Room must be dirty before cleaning");
+
+        entity.OperationalStatus = RoomOperationalStatuses.Cleaning;
+        await db.SaveChangesAsync();
+        await InvalidateAvailabilityCacheAsync();
+
+        return await GetRoomByIdAsync(id);
+    }
+
+    public async Task<RoomResponseDto?> MarkRoomCleanAsync(Guid id)
+    {
+        await using var db = await CreateDbAsync();
+        var entity = await db.Rooms.FirstOrDefaultAsync(x => x.Id == id);
+        if (entity == null) return null;
+
+        if (!string.Equals(entity.OperationalStatus, RoomOperationalStatuses.Cleaning, StringComparison.OrdinalIgnoreCase))
+            throw new Exception("Room must be in cleaning status");
+
+        entity.OperationalStatus = RoomOperationalStatuses.Clean;
         await db.SaveChangesAsync();
         await InvalidateAvailabilityCacheAsync();
 
@@ -322,6 +387,7 @@ public class RoomManagementService : IRoomManagementService
             .AsNoTracking()
             .Where(r =>
                 r.Status == "available" &&
+                r.OperationalStatus == RoomOperationalStatuses.Clean &&
                 !db.RoomAvailabilities.Any(a =>
                     a.RoomId == r.Id &&
                     a.Date >= checkIn &&
@@ -358,6 +424,7 @@ public class RoomManagementService : IRoomManagementService
             Id = r.Id,
             RoomNumber = r.RoomNumber,
             Status = r.Status,
+            OperationalStatus = r.OperationalStatus,
 
             RoomType = new RoomTypeResponseDto
             {
@@ -398,6 +465,15 @@ public class RoomManagementService : IRoomManagementService
         if (!AllowedRoomStatuses.Contains(s))
             throw new Exception("Invalid room status");
         return s;
+    }
+
+    private static string NormalizeOperationalStatus(string status)
+    {
+        var value = status.Trim().ToLowerInvariant();
+        if (!RoomOperationalStatuses.Allowed.Contains(value))
+            throw new Exception("Invalid room operational status");
+
+        return value;
     }
 
     private Task InvalidateAvailabilityCacheAsync()

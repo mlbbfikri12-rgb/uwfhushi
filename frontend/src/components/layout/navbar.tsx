@@ -1,7 +1,5 @@
-"use client";
-
 import Link from "next/link";
-import { useState, useEffect } from "react";
+import { NavbarBackground } from "./NavbarBackground";
 
 const NAV_LINKS = [
   { label: "Home", href: "/" },
@@ -13,29 +11,15 @@ const NAV_LINKS = [
 ];
 
 export function Navbar() {
-  const [scrolled, setScrolled] = useState(false);
-
-  useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 10);
-    window.addEventListener("scroll", onScroll);
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
-
   return (
-    <header
-      className={`fixed top-0 left-0 w-full z-50 transition-colors duration-300 ${
-        scrolled ? "bg-[#1a1f3c] shadow-lg" : "bg-[#1a1f3c]/80 backdrop-blur-md"
-      }`}
-    >
+    <NavbarBackground>
       <div className="max-w-7xl mx-auto flex items-center justify-between px-6 h-16">
-        {/* Logo */}
         <Link href="/" className="flex items-center gap-1 shrink-0">
           <span className="text-white font-bold text-xl tracking-tight">
             my<span className="text-[#c4a661]">Lynn</span>
           </span>
         </Link>
 
-        {/* Menu — Desktop */}
         <nav className="hidden md:flex items-center gap-7">
           {NAV_LINKS.map((link) => (
             <Link
@@ -48,7 +32,6 @@ export function Navbar() {
           ))}
         </nav>
 
-        {/* CTA */}
         <Link
           href="/login"
           className="hidden md:flex items-center gap-2 bg-[#c4a661] hover:bg-[#b8954f] text-[#1a1f3c] font-semibold text-sm px-5 py-2.5 rounded-md transition-colors shrink-0"
@@ -71,7 +54,6 @@ export function Navbar() {
           </svg>
         </Link>
 
-        {/* Mobile hamburger */}
         <button className="md:hidden text-white p-2">
           <svg
             width="22"
@@ -87,6 +69,6 @@ export function Navbar() {
           </svg>
         </button>
       </div>
-    </header>
+    </NavbarBackground>
   );
 }

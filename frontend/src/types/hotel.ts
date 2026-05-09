@@ -34,6 +34,8 @@ export type UIRatePlan = {
   benefits?: BenefitCode[]; // ✅ FIX
   terms?: string;
   price: number;
+  isBreakFast: boolean;
+  isRefundable: boolean;
 };
 
 export type UIRoomType = {
@@ -43,6 +45,8 @@ export type UIRoomType = {
   image: string;
   capacity: number;
   bedType: string;
+  MaxAdults?: number;
+  MaxChildren?: number;
   size: number;
   facilities: Facility[];
   ratePlans: UIRatePlan[];

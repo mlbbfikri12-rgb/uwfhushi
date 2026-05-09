@@ -4,7 +4,7 @@ using Hotel.Api.DTOs;
 using Hotel.Api.Entities.Master;
 using Hotel.Api.Entities.Tenant;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using System.Data;
@@ -14,7 +14,8 @@ namespace Hotel.Api.Services;
 public interface IBookingService
 {
     Task<Booking> CreateBookingAsync(
-        Guid roomId,
+        Guid roomTypeId,
+        Guid ratePlanId,
         string customerName,
         string customerEmail,
         string customerPhone,
@@ -23,23 +24,27 @@ public interface IBookingService
         int adult,
         int child,
         string? paymentMethod,
-        string? notes);
+        string? notes,
+        Guid? bookingGroupId = null);
 
     Task<Booking> CreateBookingForCustomerAsync(
         Guid customerGlobalId,
-        Guid roomId,
+        Guid roomTypeId,
+        Guid ratePlanId,
         DateTime checkIn,
         DateTime checkOut,
         int adult,
         int child,
         string? paymentMethod,
-        string? notes);
+        string? notes,
+        Guid? bookingGroupId = null);
 
     Task<CheckoutOrderResponseDto> CheckoutFromOrderAsync(
         Guid customerGlobalId,
         CheckoutOrderDto dto);
-}
 
+    Task<GuestCheckoutResponseDto> GuestCheckoutAsync(GuestCheckoutDto dto);
+}
 
 public class NoopDistributedLockService : IDistributedLockService
 {
@@ -50,11 +55,7 @@ public class NoopDistributedLockService : IDistributedLockService
 
     private class NoopHandle : IAsyncDisposable
     {
-        public ValueTask DisposeAsync()
-        {
-            // do nothing
-            return ValueTask.CompletedTask;
-        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
 
@@ -62,100 +63,71 @@ public class NoopEmailQueue : IEmailQueue
 {
     public void Enqueue(Func<CancellationToken, Task> job)
     {
-        // langsung execute (biar test tetap jalan)
         _ = job(CancellationToken.None);
     }
 }
-
-
 
 public class BookingService : IBookingService
 {
     private readonly ITenantDbFactory _tenantDbFactory;
     private readonly MasterDbContext _masterDb;
     private readonly ICacheService _cache;
-    private readonly IBookingEmailService _bookingEmailService;
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly BookingValidationSettings _validationSettings;
-    private readonly ILogger<BookingService> _logger;
-    private readonly IEmailQueue _emailQueue;
-
     private readonly IDistributedLockService _lockService;
     private readonly bool _skipBranchValidation;
 
-    // 🔹 1. TEST / FALLBACK CONSTRUCTOR
     public BookingService(ITenantDbFactory tenantDbFactory, MasterDbContext masterDb)
         : this(
             tenantDbFactory,
             masterDb,
             new NoopCacheService(),
-            new NoopBookingEmailService(),
             new HttpContextAccessor(),
             Options.Create(new BookingValidationSettings()),
-            NullLogger<BookingService>.Instance,
             new NoopDistributedLockService(),
-            new NoopEmailQueue(),
             skipBranchValidation: true)
     {
     }
 
-    // 🔹 2. PRODUCTION CONSTRUCTOR (DI)
     public BookingService(
         ITenantDbFactory tenantDbFactory,
         MasterDbContext masterDb,
         ICacheService cache,
-        IBookingEmailService bookingEmailService,
         IHttpContextAccessor httpContextAccessor,
         IOptions<BookingValidationSettings> validationSettings,
-        ILogger<BookingService> logger,
-        IDistributedLockService lockService,
-        IEmailQueue emailQueue) // ✅ TAMBAH
+        IDistributedLockService lockService)
         : this(
             tenantDbFactory,
             masterDb,
             cache,
-            bookingEmailService,
             httpContextAccessor,
             validationSettings,
-            logger,
             lockService,
-            emailQueue,
             skipBranchValidation: false)
     {
     }
 
-    // 🔹 3. INTERNAL CONSTRUCTOR (SOURCE OF TRUTH)
     private BookingService(
         ITenantDbFactory tenantDbFactory,
         MasterDbContext masterDb,
         ICacheService cache,
-        IBookingEmailService bookingEmailService,
         IHttpContextAccessor httpContextAccessor,
         IOptions<BookingValidationSettings> validationSettings,
-        ILogger<BookingService> logger,
         IDistributedLockService lockService,
-        IEmailQueue emailQueue, // ✅ WAJIB ADA DI SINI
         bool skipBranchValidation)
     {
         _tenantDbFactory = tenantDbFactory;
         _masterDb = masterDb;
         _cache = cache;
-        _bookingEmailService = bookingEmailService;
         _httpContextAccessor = httpContextAccessor;
         _validationSettings = validationSettings.Value;
-        _logger = logger;
-        _lockService = lockService ?? throw new ArgumentNullException(nameof(lockService));
-        _emailQueue = emailQueue ?? throw new ArgumentNullException(nameof(emailQueue));
+        _lockService = lockService;
         _skipBranchValidation = skipBranchValidation;
     }
 
-    private async Task<AppDbContext> CreateDbAsync(CancellationToken ct = default)
-    {
-        var branchCode = GetBranchCode();
-        return await _tenantDbFactory.CreateAsync(branchCode, ct);
-    }
-    public async Task<Booking> CreateBookingAsync(
-        Guid roomId,
+    public Task<Booking> CreateBookingAsync(
+        Guid roomTypeId,
+        Guid ratePlanId,
         string customerName,
         string customerEmail,
         string customerPhone,
@@ -164,11 +136,13 @@ public class BookingService : IBookingService
         int adult,
         int child,
         string? paymentMethod,
-        string? notes)
+        string? notes,
+        Guid? bookingGroupId = null)
     {
-        return await CreateBookingCoreAsync(
+        return CreateBookingCoreAsync(
             null,
-            roomId,
+            roomTypeId,
+            ratePlanId,
             customerName,
             customerEmail,
             customerPhone,
@@ -177,22 +151,26 @@ public class BookingService : IBookingService
             adult,
             child,
             paymentMethod,
-            notes);
+            notes,
+            bookingGroupId);
     }
 
-    public async Task<Booking> CreateBookingForCustomerAsync(
+    public Task<Booking> CreateBookingForCustomerAsync(
         Guid customerGlobalId,
-        Guid roomId,
+        Guid roomTypeId,
+        Guid ratePlanId,
         DateTime checkIn,
         DateTime checkOut,
         int adult,
         int child,
         string? paymentMethod,
-        string? notes)
+        string? notes,
+        Guid? bookingGroupId = null)
     {
-        return await CreateBookingCoreAsync(
+        return CreateBookingCoreAsync(
             customerGlobalId,
-            roomId,
+            roomTypeId,
+            ratePlanId,
             string.Empty,
             string.Empty,
             string.Empty,
@@ -201,12 +179,11 @@ public class BookingService : IBookingService
             adult,
             child,
             paymentMethod,
-            notes);
+            notes,
+            bookingGroupId);
     }
 
-    public async Task<CheckoutOrderResponseDto> CheckoutFromOrderAsync(
-        Guid customerGlobalId,
-        CheckoutOrderDto dto)
+    public async Task<CheckoutOrderResponseDto> CheckoutFromOrderAsync(Guid customerGlobalId, CheckoutOrderDto dto)
     {
         if (dto.AdultCount < 1)
             throw new Exception("At least one adult guest is required");
@@ -215,7 +192,8 @@ public class BookingService : IBookingService
             .FirstOrDefaultAsync(c => c.Id == customerGlobalId)
             ?? throw new Exception("Customer not found");
 
-        await using var db = await CreateDbAsync();
+        var branchCode = GetBranchCode();
+        await using var db = await _tenantDbFactory.CreateAsync(branchCode);
 
         var customer = await db.Customers
             .FirstOrDefaultAsync(c => c.GlobalCustomerId == customerGlobalId)
@@ -229,97 +207,40 @@ public class BookingService : IBookingService
         if (draft == null || draft.Items.Count == 0)
             throw new Exception("Order draft is empty");
 
-        // 🔥 GLOBAL LOCK (FIX UTAMA)
         var globalLockKey = $"checkout:{customer.Id}:{draft.Id}";
-        await using var handle = await _lockService.AcquireAsync(globalLockKey, TimeSpan.FromSeconds(10));
+        await using var lockHandle = await _lockService.AcquireAsync(globalLockKey, TimeSpan.FromSeconds(20));
 
         using var masterTx = await _masterDb.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted);
-        using var tenantTx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        await using var tenantTx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
 
         try
         {
             var resultItems = new List<CheckoutBookingItemDto>();
-
-            var roomTypeIds = draft.Items.Select(i => i.RoomTypeId).Distinct().ToList();
-
-            var allRooms = await db.Rooms
-                .Where(r => roomTypeIds.Contains(r.RoomTypeId) && r.Status == "available")
-                .Select(r => new
-                {
-                    r.Id,
-                    r.RoomTypeId,
-                    r.RoomNumber,
-                    RoomTypeName = r.RoomType.Name,
-                    r.RoomType.MaxAdults,
-                    r.RoomType.MaxChildren
-                })
-                .ToListAsync();
-
-            var roomsByType = allRooms
-                .GroupBy(r => r.RoomTypeId)
-                .ToDictionary(g => g.Key, g => g.ToList());
-
-            var allRoomIds = allRooms.Select(r => r.Id).ToList();
-
-            var allDates = draft.Items
-                .SelectMany(i =>
-                    Enumerable.Range(0, (i.CheckOut.Date - i.CheckIn.Date).Days)
-                        .Select(d => i.CheckIn.Date.AddDays(d)))
-                .Distinct()
-                .ToList();
-
-            var allAvailabilities = await db.RoomAvailabilities
-                .Where(a => allRoomIds.Contains(a.RoomId) && allDates.Contains(a.Date))
-                .ToListAsync();
-
-            var availabilityLookup = allAvailabilities
-                .GroupBy(a => a.RoomId)
-                .ToDictionary(g => g.Key, g => g.ToDictionary(x => x.Date));
+            var holdUntilUtc = DateTime.UtcNow.AddMinutes(_validationSettings.PendingHoldMinutes);
+            var bookingGroup = new BookingGroup
+            {
+                Id = Guid.NewGuid(),
+                GroupCode = await GenerateBookingGroupCodeAsync(db),
+                CustomerId = customer.Id,
+                Status = "pending",
+                HoldUntilUtc = holdUntilUtc,
+                CreatedAt = DateTime.UtcNow
+            };
+            db.BookingGroups.Add(bookingGroup);
 
             foreach (var item in draft.Items.OrderBy(i => i.CreatedAt))
             {
-                var checkInDate = item.CheckIn.Date;
-                var checkOutDate = item.CheckOut.Date;
-
+                var checkInDate = DateTime.SpecifyKind(item.CheckIn.Date, DateTimeKind.Utc);
+                var checkOutDate = DateTime.SpecifyKind(item.CheckOut.Date, DateTimeKind.Utc);
                 var nights = (checkOutDate - checkInDate).Days;
 
-                var dates = Enumerable.Range(0, nights)
-                    .Select(offset => checkInDate.AddDays(offset))
-                    .ToList();
+                if (nights <= 0)
+                    throw new InvalidOperationException("Invalid date range");
 
-                if (!roomsByType.TryGetValue(item.RoomTypeId, out var candidateRooms))
-                    throw new InvalidOperationException("Room not available");
-
-                candidateRooms = candidateRooms
-                    .Where(r => dto.AdultCount <= r.MaxAdults && dto.ChildCount <= r.MaxChildren)
-                    .ToList();
-
-                if (candidateRooms.Count < item.TotalRooms)
-                    throw new InvalidOperationException("Room not available");
-
-                var unavailableRoomIds = new HashSet<Guid>();
-
-                foreach (var room in candidateRooms)
+                for (var i = 0; i < item.TotalRooms; i++)
                 {
-                    if (!availabilityLookup.TryGetValue(room.Id, out var roomDates))
-                        continue;
+                    await EnsureRoomTypeInventoryAsync(db, item.RoomTypeId, checkInDate, checkOutDate, 1);
 
-                    if (dates.Any(d => roomDates.TryGetValue(d, out var a) && !a.IsAvailable))
-                    {
-                        unavailableRoomIds.Add(room.Id);
-                    }
-                }
-
-                var selectedRooms = candidateRooms
-                    .Where(r => !unavailableRoomIds.Contains(r.Id))
-                    .Take(item.TotalRooms)
-                    .ToList();
-
-                if (selectedRooms.Count < item.TotalRooms)
-                    throw new InvalidOperationException("Room not available");
-
-                foreach (var room in selectedRooms)
-                {
                     var basePrice = item.PricePerNight * nights;
                     var tax = Math.Round(basePrice * 0.11m, 2);
                     var total = basePrice + tax;
@@ -327,8 +248,10 @@ public class BookingService : IBookingService
                     var booking = new Booking
                     {
                         Id = Guid.NewGuid(),
-                        RoomId = room.Id,
                         CustomerId = customer.Id,
+                        BookingGroupId = bookingGroup.Id,
+                        RoomTypeId = item.RoomTypeId,
+                        RoomId = null,
                         CheckIn = checkInDate,
                         CheckOut = checkOutDate,
                         AdultCount = dto.AdultCount,
@@ -336,37 +259,24 @@ public class BookingService : IBookingService
                         BasePrice = basePrice,
                         Tax = tax,
                         TotalPrice = total,
-                        BookingCode = await GenerateBookingCodeAsync(),
+                        BookingCode = await GenerateBookingCodeAsync(db),
                         Status = "pending",
+                        PaymentMethod = dto.PaymentMethod,
                         PaymentStatus = "pending",
+                        HoldUntilUtc = holdUntilUtc,
+                        Notes = dto.Notes,
                         CreatedAt = DateTime.UtcNow
                     };
 
                     db.Bookings.Add(booking);
 
-                    if (!availabilityLookup.ContainsKey(room.Id))
-                        availabilityLookup[room.Id] = new();
-
-                    foreach (var date in dates)
-                    {
-                        availabilityLookup[room.Id][date] = new RoomAvailability
-                        {
-                            Id = Guid.NewGuid(),
-                            RoomId = room.Id,
-                            Date = date,
-                            IsAvailable = false,
-                            CreatedAt = DateTime.UtcNow
-                        };
-
-                        db.RoomAvailabilities.Add(availabilityLookup[room.Id][date]);
-                    }
-
                     resultItems.Add(new CheckoutBookingItemDto
                     {
                         BookingId = booking.Id,
-                        RoomId = room.Id,
-                        RoomNumber = room.RoomNumber,
-                        RoomTypeName = room.RoomTypeName,
+                        BookingCode = booking.BookingCode,
+                        RoomTypeId = item.RoomTypeId,
+                        RoomTypeName = item.RoomType?.Name ?? string.Empty,
+                        RatePlanName = item.RatePlan?.Name ?? string.Empty,
                         CheckIn = checkInDate,
                         CheckOut = checkOutDate,
                         TotalPrice = total
@@ -375,14 +285,18 @@ public class BookingService : IBookingService
             }
 
             draft.Status = "checked_out";
+            draft.UpdatedAt = DateTime.UtcNow;
+            bookingGroup.TotalAmount = resultItems.Sum(x => x.TotalPrice);
 
             await db.SaveChangesAsync();
             await tenantTx.CommitAsync();
             await masterTx.CommitAsync();
+            await InvalidateBookingRelatedCachesAsync(branchCode);
 
             return new CheckoutOrderResponseDto
             {
                 Message = "Success",
+                BookingGroupCode = bookingGroup.GroupCode,
                 OrderDraftId = draft.Id,
                 GrandTotal = resultItems.Sum(x => x.TotalPrice),
                 Bookings = resultItems
@@ -395,39 +309,179 @@ public class BookingService : IBookingService
             throw;
         }
     }
+
+    public async Task<GuestCheckoutResponseDto> GuestCheckoutAsync(GuestCheckoutDto dto)
+    {
+        if (dto.AdultCount < 1)
+            throw new Exception("At least one adult guest is required");
+
+        if (dto.Items == null || dto.Items.Count == 0)
+            throw new Exception("Checkout items are required");
+
+        var normalizedEmail = dto.CustomerEmail.Trim().ToLowerInvariant();
+        var normalizedName = dto.CustomerName.Trim();
+        var normalizedPhone = dto.CustomerPhone.Trim();
+
+        if (string.IsNullOrWhiteSpace(normalizedName))
+            throw new Exception("Customer name is required");
+
+        if (string.IsNullOrWhiteSpace(normalizedEmail))
+            throw new Exception("Customer email is required");
+
+        var branchCode = GetBranchCode();
+        await using var db = await _tenantDbFactory.CreateAsync(branchCode);
+
+        await using var masterTx = await _masterDb.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+        await using var tenantTx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var lockKey = $"guest-checkout:{branchCode}:{normalizedEmail}";
+        await using var lockHandle = await _lockService.AcquireAsync(lockKey, TimeSpan.FromSeconds(30));
+
+        try
+        {
+            var globalCustomer = await _masterDb.CustomersGlobal
+                .FirstOrDefaultAsync(c => c.Email == normalizedEmail);
+
+            if (globalCustomer == null)
+            {
+                globalCustomer = new CustomerGlobal
+                {
+                    Id = Guid.NewGuid(),
+                    Name = normalizedName,
+                    Email = normalizedEmail,
+                    Phone = normalizedPhone,
+                    CreatedAt = DateTime.UtcNow
+                };
+                _masterDb.CustomersGlobal.Add(globalCustomer);
+                await _masterDb.SaveChangesAsync();
+            }
+
+            var customer = await db.Customers
+                .FirstOrDefaultAsync(c => c.GlobalCustomerId == globalCustomer.Id);
+
+            if (customer == null)
+            {
+                customer = new Customer
+                {
+                    Id = Guid.NewGuid(),
+                    GlobalCustomerId = globalCustomer.Id,
+                    Name = globalCustomer.Name,
+                    Email = globalCustomer.Email,
+                    Phone = globalCustomer.Phone,
+                    IsVerified = globalCustomer.IsVerified,
+                    CreatedAt = DateTime.UtcNow
+                };
+                db.Customers.Add(customer);
+            }
+
+            var holdUntilUtc = DateTime.UtcNow.AddMinutes(_validationSettings.PendingHoldMinutes);
+            var bookingGroup = new BookingGroup
+            {
+                Id = Guid.NewGuid(),
+                GroupCode = await GenerateBookingGroupCodeAsync(db),
+                CustomerId = customer.Id,
+                Status = "pending",
+                HoldUntilUtc = holdUntilUtc,
+                CreatedAt = DateTime.UtcNow
+            };
+            db.BookingGroups.Add(bookingGroup);
+
+            var resultItems = new List<CheckoutBookingItemDto>();
+
+            foreach (var item in dto.Items)
+            {
+                if (item.TotalRooms < 1)
+                    throw new Exception("Total rooms must be at least 1");
+
+                for (var i = 0; i < item.TotalRooms; i++)
+                {
+                    var booking = await CreateBookingCoreAsync(
+                        authenticatedCustomerGlobalId: globalCustomer.Id,
+                        roomTypeId: item.RoomTypeId,
+                        ratePlanId: item.RatePlanId,
+                        customerName: globalCustomer.Name,
+                        customerEmail: globalCustomer.Email,
+                        customerPhone: globalCustomer.Phone,
+                        checkIn: item.CheckIn,
+                        checkOut: item.CheckOut,
+                        adult: dto.AdultCount,
+                        child: dto.ChildCount,
+                        paymentMethod: dto.PaymentMethod,
+                        notes: dto.Notes,
+                        bookingGroupId: bookingGroup.Id,
+                        existingDb: db,
+                        existingMasterTransaction: masterTx,
+                        existingTenantTransaction: tenantTx,
+                        skipCommit: true);
+
+                    resultItems.Add(new CheckoutBookingItemDto
+                    {
+                        BookingId = booking.Id,
+                        BookingCode = booking.BookingCode,
+                        RoomId = booking.RoomId,
+                        RoomNumber = booking.Room?.RoomNumber,
+                        RoomTypeId = booking.RoomTypeId,
+                        RoomTypeName = booking.RoomType?.Name ?? string.Empty,
+                        RatePlanName = string.Empty,
+                        CheckIn = booking.CheckIn,
+                        CheckOut = booking.CheckOut,
+                        TotalPrice = booking.TotalPrice
+                    });
+                }
+            }
+
+            bookingGroup.TotalAmount = resultItems.Sum(x => x.TotalPrice);
+            await db.SaveChangesAsync();
+            await tenantTx.CommitAsync();
+            await masterTx.CommitAsync();
+            await InvalidateBookingRelatedCachesAsync(branchCode);
+
+            return new GuestCheckoutResponseDto
+            {
+                Message = "Guest checkout success",
+                BookingGroupCode = bookingGroup.GroupCode,
+                GrandTotal = bookingGroup.TotalAmount,
+                Bookings = resultItems
+            };
+        }
+        catch
+        {
+            await tenantTx.RollbackAsync();
+            await masterTx.RollbackAsync();
+            throw;
+        }
+    }
+
     private async Task<Booking> CreateBookingCoreAsync(
-    Guid? authenticatedCustomerGlobalId,
-    Guid roomId,
-    string customerName,
-    string customerEmail,
-    string customerPhone,
-    DateTime checkIn,
-    DateTime checkOut,
-    int adult,
-    int child,
-    string? paymentMethod,
-    string? notes)
+        Guid? authenticatedCustomerGlobalId,
+        Guid roomTypeId,
+        Guid ratePlanId,
+        string customerName,
+        string customerEmail,
+        string customerPhone,
+        DateTime checkIn,
+        DateTime checkOut,
+        int adult,
+        int child,
+        string? paymentMethod,
+        string? notes,
+        Guid? bookingGroupId,
+        AppDbContext? existingDb = null,
+        IDbContextTransaction? existingMasterTransaction = null,
+        IDbContextTransaction? existingTenantTransaction = null,
+        bool skipCommit = false)
     {
         var checkInDate = DateTime.SpecifyKind(checkIn.Date, DateTimeKind.Utc);
         var checkOutDate = DateTime.SpecifyKind(checkOut.Date, DateTimeKind.Utc);
 
         var isAuthenticated = authenticatedCustomerGlobalId.HasValue;
+        ValidateBookingRequest(checkInDate, checkOutDate, customerEmail, adult, child, isAuthenticated);
 
-        ValidateBookingRequest(
-            checkInDate,
-            checkOutDate,
-            customerEmail,
-            adult,
-            child,
-            isAuthenticated);
-
-        string normalizedEmail;
-        string normalizedName;
-        string normalizedPhone;
+        var normalizedEmail = customerEmail.Trim().ToLowerInvariant();
+        var normalizedName = customerName.Trim();
+        var normalizedPhone = customerPhone.Trim();
 
         CustomerGlobal? globalCustomer = null;
-
-        // 🔥 FIX: ambil customer hanya sekali
         if (authenticatedCustomerGlobalId.HasValue)
         {
             globalCustomer = await _masterDb.CustomersGlobal
@@ -440,19 +494,13 @@ public class BookingService : IBookingService
             normalizedName = globalCustomer.Name;
             normalizedPhone = globalCustomer.Phone;
         }
-        else
+        else if (!string.IsNullOrWhiteSpace(normalizedEmail))
         {
-            normalizedEmail = customerEmail.Trim().ToLowerInvariant();
-            normalizedName = customerName.Trim();
-            normalizedPhone = customerPhone.Trim();
-
             globalCustomer = await _masterDb.CustomersGlobal
                 .FirstOrDefaultAsync(c => c.Email == normalizedEmail);
         }
 
         var branchCode = _skipBranchValidation ? "TEST" : GetBranchCode();
-        var branchName = "Test Hotel";
-
         if (!_skipBranchValidation)
         {
             var branch = await _masterDb.Branches
@@ -461,18 +509,18 @@ public class BookingService : IBookingService
 
             if (branch == null)
                 throw new Exception("Branch not found");
-
-            branchName = branch.Name;
         }
 
-        await using var db = await CreateDbAsync();
+        var db = existingDb ?? await _tenantDbFactory.CreateAsync(branchCode);
 
-        using var masterTransaction = await _masterDb.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted);
-        using var tenantTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        var masterTransaction = existingMasterTransaction
+            ?? await _masterDb.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+
+        var tenantTransaction = existingTenantTransaction
+            ?? await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
 
         try
         {
-            // 🔥 hanya create jika benar-benar belum ada
             if (globalCustomer == null)
             {
                 globalCustomer = new CustomerGlobal
@@ -507,44 +555,44 @@ public class BookingService : IBookingService
                 db.Customers.Add(customer);
             }
 
-            // 🔥 LOCK RANGE (INDEX FRIENDLY)
-            await LockRoomAvailabilityAsync(db, roomId, checkInDate, checkOutDate);
+            var roomType = await db.RoomTypes
+                .AsNoTracking()
+                .FirstOrDefaultAsync(rt => rt.Id == roomTypeId);
 
-            // 🔥 CEK AVAILABILITY (NO CONTAINS)
-            var unavailable = await db.RoomAvailabilities
-                .Where(a =>
-                    a.RoomId == roomId &&
-                    a.Date >= checkInDate &&
-                    a.Date < checkOutDate &&
-                    !a.IsAvailable)
-                .AnyAsync();
+            if (roomType == null)
+                throw new Exception("Room type not found");
 
-            if (unavailable)
-                throw new InvalidOperationException("Room not available");
-
-            var room = await db.Rooms
-                .Include(r => r.RoomType)
-                .FirstOrDefaultAsync(r => r.Id == roomId);
-
-            if (room == null)
-                throw new Exception("Room not found in this branch");
-
-            if (room.Status != "available")
-                throw new Exception("Room is not available for booking");
-
-            if (adult > room.RoomType.MaxAdults || child > room.RoomType.MaxChildren)
+            if (adult > roomType.MaxAdults || child > roomType.MaxChildren)
                 throw new Exception("Guest count exceeds room capacity");
 
+            var ratePlan = await db.RatePlans
+                .AsNoTracking()
+                .FirstOrDefaultAsync(rp =>
+                    rp.Id == ratePlanId &&
+                    rp.RoomTypeId == roomTypeId &&
+                    rp.IsActive);
+
+            if (ratePlan == null)
+                throw new Exception("Rate plan not found");
+
+            var lockKey = $"booking:{branchCode}:{roomTypeId}:{checkInDate:yyyyMMdd}:{checkOutDate:yyyyMMdd}";
+            await using var lockHandle = await _lockService.AcquireAsync(lockKey, TimeSpan.FromSeconds(10));
+
+            await EnsureRoomTypeInventoryAsync(db, roomTypeId, checkInDate, checkOutDate, 1);
+
             var days = (checkOutDate - checkInDate).Days;
-            var basePrice = room.RoomType.BasePrice * days;
+            var basePrice = ratePlan.Price * days;
             var tax = Math.Round(basePrice * 0.11m, 2);
             var totalPrice = basePrice + tax;
+            var holdUntilUtc = DateTime.UtcNow.AddMinutes(_validationSettings.PendingHoldMinutes);
 
             var booking = new Booking
             {
                 Id = Guid.NewGuid(),
-                RoomId = roomId,
                 CustomerId = customer.Id,
+                BookingGroupId = bookingGroupId,
+                RoomTypeId = roomTypeId,
+                RoomId = null,
                 CheckIn = checkInDate,
                 CheckOut = checkOutDate,
                 AdultCount = adult,
@@ -552,103 +600,108 @@ public class BookingService : IBookingService
                 BasePrice = basePrice,
                 Tax = tax,
                 TotalPrice = totalPrice,
-                BookingCode = await GenerateBookingCodeAsync(),
+                BookingCode = await GenerateBookingCodeAsync(db),
                 Status = "pending",
                 PaymentMethod = paymentMethod,
                 PaymentStatus = "pending",
+                HoldUntilUtc = holdUntilUtc,
                 Notes = notes,
                 CreatedAt = DateTime.UtcNow
             };
 
             db.Bookings.Add(booking);
-
-            // 🔥 tetap butuh ini untuk loop insert/update
-            var dates = Enumerable.Range(0, (checkOutDate - checkInDate).Days)
-    .Select(offset => checkInDate.AddDays(offset))
-    .ToList();
-
-            // 🔥 ambil existing availability (range-based, index friendly)
-            var existingAvailabilities = await db.RoomAvailabilities
-                .Where(a =>
-                    a.RoomId == roomId &&
-                    a.Date >= checkInDate &&
-                    a.Date < checkOutDate)
-                .ToDictionaryAsync(a => a.Date);
-
-            // 🔥 update / insert
-            foreach (var date in dates)
-            {
-                if (existingAvailabilities.TryGetValue(date, out var availability))
-                {
-                    availability.IsAvailable = false;
-                }
-                else
-                {
-                    db.RoomAvailabilities.Add(new RoomAvailability
-                    {
-                        Id = Guid.NewGuid(),
-                        RoomId = roomId,
-                        Date = date,
-                        IsAvailable = false,
-                        CreatedAt = DateTime.UtcNow
-                    });
-                }
-            }
-
-
-
             await db.SaveChangesAsync();
 
-            await tenantTransaction.CommitAsync();
-            await masterTransaction.CommitAsync();
-            await InvalidateBookingRelatedCachesAsync(branchCode);
-
-            var loadedBooking = await db.Bookings
-                .AsNoTracking()
-                .Include(b => b.Customer)
-                .Include(b => b.Room)
-                .ThenInclude(r => r.RoomType)
-                .FirstOrDefaultAsync(b => b.Id == booking.Id);
-
-            if (loadedBooking != null)
+            if (!skipCommit)
             {
-                try
-                {
-                    _emailQueue.Enqueue(ct =>
-    _bookingEmailService.SendBookingCreatedAsync(loadedBooking, branchName, ct));
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Booking email failed after booking was created. BookingId={BookingId}", booking.Id);
-                }
+                await tenantTransaction.CommitAsync();
+                await masterTransaction.CommitAsync();
+                await InvalidateBookingRelatedCachesAsync(branchCode);
             }
-
             return booking;
         }
         catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
         {
-            await tenantTransaction.RollbackAsync();
-            await masterTransaction.RollbackAsync();
+            if (existingTenantTransaction == null)
+                await tenantTransaction.RollbackAsync();
+            if (existingMasterTransaction == null)
+                await masterTransaction.RollbackAsync();
             throw new Exception("Room not available");
         }
         catch (Exception ex) when (IsSerializationFailure(ex))
         {
-            await tenantTransaction.RollbackAsync();
-            await masterTransaction.RollbackAsync();
-            throw new Exception("Room not available, please try another date");
-        }
-        catch (InvalidOperationException ex) when (IsTransientFailure(ex))
-        {
-            await tenantTransaction.RollbackAsync();
-            await masterTransaction.RollbackAsync();
+            if (existingTenantTransaction == null)
+                await tenantTransaction.RollbackAsync();
+            if (existingMasterTransaction == null)
+                await masterTransaction.RollbackAsync();
             throw new Exception("Room not available, please try another date");
         }
         catch
         {
-            await tenantTransaction.RollbackAsync();
-            await masterTransaction.RollbackAsync();
+            if (existingTenantTransaction == null)
+                await tenantTransaction.RollbackAsync();
+            if (existingMasterTransaction == null)
+                await masterTransaction.RollbackAsync();
             throw;
         }
+        finally
+        {
+            if (existingDb == null)
+            {
+                await db.DisposeAsync();
+            }
+
+            if (existingMasterTransaction == null)
+            {
+                await masterTransaction.DisposeAsync();
+            }
+
+            if (existingTenantTransaction == null)
+            {
+                await tenantTransaction.DisposeAsync();
+            }
+        }
+    }
+
+    private async Task EnsureRoomTypeInventoryAsync(
+        AppDbContext db,
+        Guid roomTypeId,
+        DateTime checkInDate,
+        DateTime checkOutDate,
+        int requestedRooms)
+    {
+        var candidateRoomIds = await db.Rooms
+            .AsNoTracking()
+            .Where(r =>
+                r.RoomTypeId == roomTypeId &&
+                r.Status == "available" &&
+                r.OperationalStatus == RoomOperationalStatuses.Clean &&
+                !db.RoomAvailabilities.Any(a =>
+                    a.RoomId == r.Id &&
+                    a.Date >= checkInDate &&
+                    a.Date < checkOutDate &&
+                    !a.IsAvailable))
+            .Select(r => r.Id)
+            .ToListAsync();
+
+        var totalSellableRooms = candidateRoomIds.Count;
+        if (totalSellableRooms <= 0)
+            throw new InvalidOperationException("Room not available");
+
+        var activeBookingsCount = await db.Bookings
+            .AsNoTracking()
+            .CountAsync(b =>
+                b.RoomTypeId == roomTypeId &&
+                (
+                    b.Status == "paid" ||
+                    b.Status == "confirmed" ||
+                    (b.Status == "pending" && b.HoldUntilUtc > DateTime.UtcNow)
+                ) &&
+                b.CheckIn < checkOutDate &&
+                b.CheckOut > checkInDate);
+
+        if (totalSellableRooms - activeBookingsCount < requestedRooms)
+            throw new InvalidOperationException("Room not available");
     }
 
     private static bool IsUniqueConstraintViolation(DbUpdateException exception)
@@ -656,34 +709,12 @@ public class BookingService : IBookingService
         return FindPostgresException(exception)?.SqlState == PostgresErrorCodes.UniqueViolation;
     }
 
-
-    private async Task LockRoomAvailabilityAsync(
-        AppDbContext db,
-        Guid roomId,
-        DateTime checkInDate,
-        DateTime checkOutDate)
-    {
-        await db.Database.ExecuteSqlRawAsync(@"
-        SELECT 1
-        FROM ""RoomAvailabilities""
-        WHERE ""RoomId"" = {0}
-        AND ""Date"" >= {1}
-        AND ""Date"" < {2}
-        FOR UPDATE SKIP LOCKED
-    ", roomId, checkInDate, checkOutDate);
-    }
     private static bool IsSerializationFailure(Exception exception)
     {
         var postgresException = FindPostgresException(exception);
-
         return postgresException?.SqlState is
             PostgresErrorCodes.SerializationFailure or
             PostgresErrorCodes.DeadlockDetected;
-    }
-
-    private static bool IsTransientFailure(Exception exception)
-    {
-        return exception.Message.Contains("transient failure", StringComparison.OrdinalIgnoreCase);
     }
 
     private static PostgresException? FindPostgresException(Exception exception)
@@ -694,20 +725,18 @@ public class BookingService : IBookingService
             if (current is PostgresException postgresException)
                 return postgresException;
 
-            current = current.InnerException;
+            current = current.InnerException!;
         }
 
         return null;
     }
 
-    private async Task<string> GenerateBookingCodeAsync()
+    private async Task<string> GenerateBookingCodeAsync(AppDbContext db)
     {
-        await using var db = await CreateDbAsync();
         for (var attempt = 0; attempt < 5; attempt++)
         {
             var code = $"BK-{DateTime.UtcNow:yyyyMMdd}-{Random.Shared.Next(100000, 999999)}";
             var exists = await db.Bookings.AnyAsync(b => b.BookingCode == code);
-
             if (!exists)
                 return code;
         }
@@ -715,15 +744,29 @@ public class BookingService : IBookingService
         throw new Exception("Unable to generate unique booking code");
     }
 
+    private async Task<string> GenerateBookingGroupCodeAsync(AppDbContext db)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var code = $"ORD-{DateTime.UtcNow:yyyyMMdd}-{Random.Shared.Next(100000, 999999)}";
+            var exists = await db.BookingGroups.AnyAsync(g => g.GroupCode == code);
+            if (!exists)
+                return code;
+        }
+
+        throw new Exception("Unable to generate unique booking group code");
+    }
+
     private void ValidateBookingRequest(
-    DateTime checkInDate,
-    DateTime checkOutDate,
-    string? customerEmail,
-    int adult,
-    int child,
-    bool isAuthenticated)
+        DateTime checkInDate,
+        DateTime checkOutDate,
+        string? customerEmail,
+        int adult,
+        int child,
+        bool isAuthenticated)
     {
         var today = DateTime.UtcNow.Date;
+
         if (checkInDate < today)
             throw new Exception("Check-in cannot be in the past");
 
@@ -760,5 +803,4 @@ public class BookingService : IBookingService
         await _cache.RemoveByPrefixAsync($"availability:{branchCode}:");
         await _cache.RemoveByPrefixAsync($"hotel:full:{branchCode}:");
     }
-
 }

@@ -14,6 +14,19 @@ export type PublicDestination = {
   minPrice: number;
 };
 
+export type PublicPopularHotel = {
+  hotelId: string;
+  slug: string;
+  branchCode: string;
+  rating: number;
+  priceFrom: number;
+  brand: string;
+  image: string;
+  name: string;
+  city: string;
+  isCityMatch: boolean;
+};
+
 export type PublicBlog = {
   id: string;
   title: string;

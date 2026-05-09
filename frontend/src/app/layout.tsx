@@ -16,10 +16,12 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+  ),
   title: {
-    default: "Hotel Booking Platform",
-    template: "%s | Hotel Booking",
+    default: "Lynn Hotel",
+    template: "%s | Lynn Hotel",
   },
   description: "Book hotels across Indonesia with best price and experience",
   keywords: ["hotel", "booking", "hotel indonesia", "travel", "reservation"],

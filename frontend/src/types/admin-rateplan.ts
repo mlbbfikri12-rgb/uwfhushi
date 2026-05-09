@@ -1,5 +1,4 @@
 import { BenefitCode } from "@/utils/BenefitsMap";
-import { Facility } from "./hotel";
 
 export type Branch = {
     id: string;
@@ -130,6 +129,9 @@ export type PricingRatePlan = {
     price: number;
     benefits?: BenefitCode[]; // ✅ FIX
     termsPreview: string;
+
+    isBreakFast: boolean;
+    isRefundable: boolean;
 };
 
 export type PricingRoom = {
@@ -140,9 +142,9 @@ export type PricingRoom = {
     capacity: number;
     bedType: string;
     size: number;
-    maxAdults: number;
-    maxChildren: number;
-    facilities?: string[]; 
+    maxAdults?: number;
+    maxChildren?: number;
+    facilities?: string[];
     ratePlans: PricingRatePlan[];
 };
 

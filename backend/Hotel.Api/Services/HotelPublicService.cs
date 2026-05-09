@@ -304,6 +304,11 @@ public class HotelPublicService : IHotelPublicService
                 Name = rt.Name,
                 Description = rt.Description,
                 Image = rt.ImageUrl,
+                BedType = rt.BedType,
+                MaxAdults = rt.MaxAdults,
+                MaxChildren = rt.MaxChildren,
+                Size = rt.Size,
+                Capacity = rt.Capacity,
                 RatePlans = rt.RatePlans
                     .Where(rp => rp.IsActive)
                     .Select(rp => new RatePlanDetailDto
@@ -311,6 +316,8 @@ public class HotelPublicService : IHotelPublicService
                         Id = rp.Id,
                         Name = rp.Name,
                         Price = rp.Price,
+                        isbreakFast = rp.IncludesBreakfast,
+                        isRefundable = rp.IsRefundable,
                         Terms = rp.TermsConditions
                     })
                     .ToList()
@@ -396,6 +403,11 @@ public class RoomDetailDto
     public string Name { get; set; } = default!;
     public string Description { get; set; } = default!;
     public string Image { get; set; } = default!;
+    public decimal Size { get; set; }
+    public string BedType { get; set; } = default!;
+    public int Capacity { get; set; }
+    public int MaxAdults { get; set; }
+    public int MaxChildren { get; set; }
     public List<RatePlanDetailDto> RatePlans { get; set; } = new();
 }
 
@@ -404,5 +416,7 @@ public class RatePlanDetailDto
     public Guid Id { get; set; }
     public string Name { get; set; } = default!;
     public decimal Price { get; set; }
+    public bool isbreakFast { get; set; }
+    public bool isRefundable { get; set; }
     public string Terms { get; set; } = default!;
 }

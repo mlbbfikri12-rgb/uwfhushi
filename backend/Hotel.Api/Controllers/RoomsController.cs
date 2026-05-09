@@ -76,6 +76,66 @@ public class RoomsController : ControllerBase
         }
     }
 
+    [HttpPatch("{id:guid}/operational-status")]
+    [Authorize(Roles = "SPV,FO")]
+    public async Task<IActionResult> UpdateOperationalStatus(Guid id, [FromBody] UpdateRoomOperationalStatusDto dto)
+    {
+        try
+        {
+            var room = await _roomManagementService.UpdateRoomOperationalStatusAsync(id, dto.OperationalStatus);
+            return room == null ? NotFound(new { error = "Room not found" }) : Ok(room);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPatch("{id:guid}/checkout")]
+    [Authorize(Roles = "SPV,FO")]
+    public async Task<IActionResult> MarkCheckout(Guid id)
+    {
+        try
+        {
+            var room = await _roomManagementService.MarkRoomCheckedOutAsync(id);
+            return room == null ? NotFound(new { error = "Room not found" }) : Ok(room);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPatch("{id:guid}/cleaning")]
+    [Authorize(Roles = "SPV,FO")]
+    public async Task<IActionResult> MarkCleaning(Guid id)
+    {
+        try
+        {
+            var room = await _roomManagementService.MarkRoomCleaningAsync(id);
+            return room == null ? NotFound(new { error = "Room not found" }) : Ok(room);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPatch("{id:guid}/clean")]
+    [Authorize(Roles = "SPV,FO")]
+    public async Task<IActionResult> MarkClean(Guid id)
+    {
+        try
+        {
+            var room = await _roomManagementService.MarkRoomCleanAsync(id);
+            return room == null ? NotFound(new { error = "Room not found" }) : Ok(room);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     [HttpPost("{roomId:guid}/images")]
     [Authorize(Roles = "SPV,FO")]
     public async Task<IActionResult> AddRoomImage(Guid roomId, [FromBody] AddRoomImageDto dto)

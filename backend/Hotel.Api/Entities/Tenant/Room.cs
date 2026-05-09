@@ -12,6 +12,8 @@ public class Room
     public string Status { get; set; } = "available";
     // available | maintenance | occupied
 
+    public string OperationalStatus { get; set; } = RoomOperationalStatuses.Clean;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public ICollection<RoomAvailability> Availabilities { get; set; } = new List<RoomAvailability>();
 

@@ -37,10 +37,10 @@ export default function ResendVerificationPage() {
 
       setStatus("success");
       setCooldown(60); // 🔥 anti spam
-    } catch (err: any) {
+    } catch (err: unknown) {
       setStatus("error");
       setError(
-        err?.response?.data?.message || "Gagal mengirim email verifikasi",
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Gagal mengirim email verifikasi",
       );
     }
   };

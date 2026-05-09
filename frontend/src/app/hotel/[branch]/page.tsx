@@ -49,7 +49,7 @@ export default async function Page({ params, searchParams }: PageProps) {
       slug={params.branch}
       checkIn={checkIn}
       checkOut={checkOut}
-      totalRooms={totalRooms}
+      //totalRooms={totalRooms}
       hotel={hotel}
     />
   );

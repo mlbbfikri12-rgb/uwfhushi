@@ -136,7 +136,9 @@ if (!isSeedPrice)
     builder.Services.AddScoped<IBookingService, BookingService>();
     builder.Services.AddScoped<IPaymentService, PaymentService>();
     builder.Services.AddScoped<IOrderService, OrderService>();
+    builder.Services.AddScoped<IBookingExpiryService, BookingExpiryService>();
     builder.Services.AddScoped<IRoomManagementService, RoomManagementService>();
+    builder.Services.AddScoped<IRoomAssignmentService, RoomAssignmentService>();
     builder.Services.AddScoped<IRatePlanAdminService, RatePlanAdminService>();
     builder.Services.AddScoped<ITenantSeedService, TenantSeedService>();
 }
@@ -161,6 +163,7 @@ builder.Services.AddScoped<IBannerService, BannerService>();
 builder.Services.AddSingleton<EmailQueue>();
 builder.Services.AddSingleton<IEmailQueue>(sp => sp.GetRequiredService<EmailQueue>());
 builder.Services.AddHostedService<EmailBackgroundService>();
+builder.Services.AddHostedService<PendingBookingExpiryBackgroundService>();
 builder.Services.AddSingleton<IDistributedLockService, RedisDistributedLockService>();
 builder.Services.AddScoped<IBookingEmailService, BookingEmailService>();
 builder.Services.AddHttpClient<IObjectStorageService, ObjectStorageService>();

@@ -52,29 +52,13 @@ public class PublicHotelSearchService : IPublicHotelSearchService
         if (cached != null)
             return cached;
 
-        var normalized = q.ToUpperInvariant();
-
-        var isCityMatch = await _masterDb.Cities
-            .AsNoTracking()
-            .AnyAsync(c => EF.Functions.ILike(c.Name, $"%{normalized}%"), cancellationToken);
-
-        var isHotelMatch = await _masterDb.Hotels
-            .AsNoTracking()
-            .AnyAsync(h => h.IsActive &&
-                (EF.Functions.ILike(h.Name, $"%{normalized}%") ||
-                 EF.Functions.ILike(h.BranchCode, $"%{normalized}%")),
-                cancellationToken);
-
-        var responseType = isHotelMatch && !isCityMatch ? "hotel" : "city";
+        var normalized = q;
 
         // =========================
-        // QUERY HOTEL MASTER
+        // BASE QUERY
         // =========================
         var hotelsQuery = _masterDb.Hotels
             .AsNoTracking()
-            .Include(h => h.City)
-            .Include(h => h.Brand)
-            .Include(h => h.Images)
             .Where(h => h.IsActive);
 
         if (!string.IsNullOrWhiteSpace(normalized))
@@ -101,57 +85,68 @@ public class PublicHotelSearchService : IPublicHotelSearchService
             hotelsQuery = hotelsQuery.Where(h =>
                 query.Stars.Contains((int)Math.Round(h.Rating)));
 
-        var hotels = await hotelsQuery
-            .OrderByDescending(h => h.Rating)
-            .ThenBy(h => h.Name)
+        // =========================
+        // JOIN PRICE (🔥 penting)
+        // =========================
+        var queryWithPrice =
+            from h in hotelsQuery
+            join p in _masterDb.HotelPriceSummaries
+                on h.Slug equals p.Slug into priceJoin
+            from p in priceJoin.DefaultIfEmpty()
+            select new
+            {
+                h.Id,
+                h.Slug,
+                h.Name,
+                h.BranchCode,
+                h.Rating,
+                CityName = h.City!.Name,
+                BrandName = h.Brand != null ? h.Brand.Name : "",
+                Image = h.Images
+                    .OrderBy(i => i.SortOrder)
+                    .Select(i => i.Url)
+                    .FirstOrDefault(),
+                PriceFrom = p != null ? p.LowestPrice : 0m
+            };
+
+        // =========================
+        // FILTER PRICE DI DB
+        // =========================
+        if (query.MinPrice.HasValue)
+            queryWithPrice = queryWithPrice.Where(x => x.PriceFrom >= query.MinPrice.Value);
+
+        if (query.MaxPrice.HasValue)
+            queryWithPrice = queryWithPrice.Where(x => x.PriceFrom <= query.MaxPrice.Value);
+
+        // =========================
+        // EXECUTE QUERY
+        // =========================
+        var hotels = await queryWithPrice
+            .OrderByDescending(x => x.Rating)
+            .ThenBy(x => x.Name)
             .ToListAsync(cancellationToken);
-
-        // =========================
-        // 🔥 PRICE FROM MASTER (NO TENANT)
-        // =========================
-        var slugs = hotels.Select(h => h.Slug).ToList();
-
-        var priceMap = await _masterDb.HotelPriceSummaries
-            .Where(p => slugs.Contains(p.Slug))
-            .ToDictionaryAsync(p => p.Slug, p => p.LowestPrice, cancellationToken);
 
         // =========================
         // BUILD RESULT
         // =========================
-        var list = new List<PublicHotelListItemDto>();
-
-        foreach (var hotel in hotels)
+        var list = hotels.Select(h => new PublicHotelListItemDto
         {
-            var priceFrom = priceMap.TryGetValue(hotel.Slug, out var p) ? p : 0m;
-
-            if (query.MinPrice.HasValue && priceFrom < query.MinPrice.Value)
-                continue;
-
-            if (query.MaxPrice.HasValue && priceFrom > query.MaxPrice.Value)
-                continue;
-
-            list.Add(new PublicHotelListItemDto
-            {
-                HotelId = hotel.Id,
-                Slug = hotel.Slug,
-                BranchCode = hotel.BranchCode,
-                Name = hotel.Name,
-                City = hotel.City?.Name ?? string.Empty,
-                Rating = hotel.Rating,
-                PriceFrom = priceFrom,
-                Image = hotel.Images
-                    .OrderBy(i => i.SortOrder)
-                    .Select(i => i.Url)
-                    .FirstOrDefault() ?? string.Empty,
-                Brand = hotel.Brand?.Name ?? string.Empty,
-                IsCityMatch = !string.IsNullOrWhiteSpace(normalized) &&
-                              (hotel.City?.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
-            });
-        }
+            HotelId = h.Id,
+            Slug = h.Slug,
+            BranchCode = h.BranchCode,
+            Name = h.Name,
+            City = h.CityName,
+            Rating = h.Rating,
+            PriceFrom = h.PriceFrom,
+            Image = h.Image ?? string.Empty,
+            Brand = h.BrandName,
+            IsCityMatch = !string.IsNullOrWhiteSpace(normalized) &&
+                          h.CityName.Contains(normalized, StringComparison.OrdinalIgnoreCase)
+        }).ToList();
 
         var response = new PublicHotelSearchResponseDto
         {
-            Type = responseType,
+            Type = list.Any(x => x.Name.Contains(q, StringComparison.OrdinalIgnoreCase)) ? "hotel" : "city",
             Hotels = list
         };
 

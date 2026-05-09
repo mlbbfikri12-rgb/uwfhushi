@@ -8,8 +8,14 @@ public class Booking
     public Guid CustomerId { get; set; }
     public Customer Customer { get; set; } = null!;
 
-    public Guid RoomId { get; set; }
-    public Room Room { get; set; } = null!;
+    public Guid? BookingGroupId { get; set; }
+    public BookingGroup? BookingGroup { get; set; }
+
+    public Guid RoomTypeId { get; set; }
+    public RoomType RoomType { get; set; } = null!;
+
+    public Guid? RoomId { get; set; }
+    public Room? Room { get; set; }
 
     // 🔥 DATE
     public DateTime CheckIn { get; set; }
@@ -32,6 +38,9 @@ public class Booking
     public string? PaymentMethod { get; set; }
     public string? PaymentStatus { get; set; }
     public DateTime? PaidAt { get; set; }
+    public DateTime HoldUntilUtc { get; set; }
+    public DateTime? ConfirmedAtUtc { get; set; }
+    public DateTime? ConfirmationEmailSentAtUtc { get; set; }
 
     // 🔥 BOOKING CODE (penting banget)
     public string BookingCode { get; set; } = string.Empty;

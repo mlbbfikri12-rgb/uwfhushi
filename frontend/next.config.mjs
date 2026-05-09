@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: "standalone",
+  //output: "standalone",
   images: {
     remotePatterns: [
       {
@@ -8,9 +8,8 @@ const nextConfig = {
         hostname: "images.unsplash.com",
       },
       {
-        protocol: "http",
-        hostname: "localhost",
-        port: "5000",
+        protocol: "https",
+        hostname: "argillaceous-gwenn-overindulgent.ngrok-free.dev",
         pathname: "/uploads/**",
       },
     ],

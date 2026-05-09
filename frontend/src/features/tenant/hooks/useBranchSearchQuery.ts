@@ -1,7 +1,7 @@
 "use client";
 
+import { searchBranches } from "@/services/client/public.client";
 import { useQuery } from "@tanstack/react-query";
-import { searchBranches } from "@/services/branch.service";
 
 export function useBranchSearchQuery(keyword: string) {
   return useQuery({

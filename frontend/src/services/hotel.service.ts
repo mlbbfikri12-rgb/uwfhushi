@@ -1,6 +1,6 @@
 import { PricingRoom } from "@/types/admin-rateplan";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL!;
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://argillaceous-gwenn-overindulgent.ngrok-free.dev";
 
 export async function getHotel(slug: string) {
   const res = await fetch(`${API_URL}/api/hotel/${slug}`, {
@@ -23,9 +23,16 @@ export async function getHotelPricing(params: {
     checkOut: params.checkOut,
   });
 
+  //console.log(`${API_URL}/api/hotel/${params.slug}/pricing?${query}`);
+
   const res = await fetch(
-    `${API_URL}/api/hotel/${params.slug}/pricing?${query}`
+    `${API_URL}/api/hotel/${params.slug}/pricing?${query}`, {
+    headers: {
+      "ngrok-skip-browser-warning": "true",
+    },
+  }
   );
+
 
   if (!res.ok) throw new Error("Failed fetch pricing");
 
@@ -39,7 +46,11 @@ export async function getRoomDetail(
   roomTypeId: string
 ) {
   const res = await fetch(
-    `${API_URL}/api/hotel/${slug}/room/${roomTypeId}`
+    `${API_URL}/api/hotel/${slug}/room/${roomTypeId}`, {
+    headers: {
+      "ngrok-skip-browser-warning": "true",
+    },
+  }
   );
 
   if (!res.ok) throw new Error("Failed fetch room detail");

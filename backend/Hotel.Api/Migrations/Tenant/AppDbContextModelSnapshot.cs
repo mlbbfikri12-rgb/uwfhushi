@@ -38,6 +38,9 @@ namespace Hotel.Api.Migrations.Tenant
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("BookingGroupId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime>("CheckIn")
                         .HasColumnType("timestamp with time zone");
 
@@ -47,11 +50,20 @@ namespace Hotel.Api.Migrations.Tenant
                     b.Property<int>("ChildCount")
                         .HasColumnType("integer");
 
+                    b.Property<DateTime?>("ConfirmationEmailSentAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ConfirmedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("CustomerId")
                         .HasColumnType("uuid");
+
+                    b.Property<DateTime>("HoldUntilUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Notes")
                         .HasColumnType("text");
@@ -65,7 +77,10 @@ namespace Hotel.Api.Migrations.Tenant
                     b.Property<string>("PaymentStatus")
                         .HasColumnType("text");
 
-                    b.Property<Guid>("RoomId")
+                    b.Property<Guid?>("RoomId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("RoomTypeId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Status")
@@ -83,15 +98,62 @@ namespace Hotel.Api.Migrations.Tenant
                     b.HasIndex("BookingCode")
                         .IsUnique();
 
+                    b.HasIndex("BookingGroupId");
+
                     b.HasIndex("CustomerId");
 
                     b.HasIndex("RoomId");
+
+                    b.HasIndex("RoomTypeId");
 
                     b.HasIndex("CheckIn", "CheckOut");
 
                     b.HasIndex("Status", "CheckIn");
 
+                    b.HasIndex("Status", "HoldUntilUtc", "RoomTypeId");
+
                     b.ToTable("Bookings");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.BookingGroup", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("GroupCode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("HoldUntilUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("PaidAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasColumnType("numeric");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerId");
+
+                    b.HasIndex("GroupCode")
+                        .IsUnique();
+
+                    b.HasIndex("Status", "HoldUntilUtc");
+
+                    b.ToTable("BookingGroups");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.Customer", b =>
@@ -286,6 +348,10 @@ namespace Hotel.Api.Migrations.Tenant
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("OperationalStatus")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("RoomNumber")
                         .IsRequired()
                         .HasColumnType("text");
@@ -303,6 +369,8 @@ namespace Hotel.Api.Migrations.Tenant
                         .IsUnique();
 
                     b.HasIndex("RoomTypeId");
+
+                    b.HasIndex("RoomTypeId", "Status", "OperationalStatus");
 
                     b.ToTable("Rooms");
                 });
@@ -434,6 +502,11 @@ namespace Hotel.Api.Migrations.Tenant
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.Booking", b =>
                 {
+                    b.HasOne("Hotel.Api.Entities.Tenant.BookingGroup", "BookingGroup")
+                        .WithMany("Bookings")
+                        .HasForeignKey("BookingGroupId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Hotel.Api.Entities.Tenant.Customer", "Customer")
                         .WithMany("Bookings")
                         .HasForeignKey("CustomerId")
@@ -443,12 +516,32 @@ namespace Hotel.Api.Migrations.Tenant
                     b.HasOne("Hotel.Api.Entities.Tenant.Room", "Room")
                         .WithMany("Bookings")
                         .HasForeignKey("RoomId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Hotel.Api.Entities.Tenant.RoomType", "RoomType")
+                        .WithMany()
+                        .HasForeignKey("RoomTypeId")
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("BookingGroup");
 
                     b.Navigation("Customer");
 
                     b.Navigation("Room");
+
+                    b.Navigation("RoomType");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.BookingGroup", b =>
+                {
+                    b.HasOne("Hotel.Api.Entities.Tenant.Customer", "Customer")
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Customer");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.OrderDraft", b =>
@@ -553,6 +646,11 @@ namespace Hotel.Api.Migrations.Tenant
                         .IsRequired();
 
                     b.Navigation("RoomType");
+                });
+
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.BookingGroup", b =>
+                {
+                    b.Navigation("Bookings");
                 });
 
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.Customer", b =>

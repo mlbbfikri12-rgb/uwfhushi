@@ -3,8 +3,8 @@ export interface AdminRoomType {
     name: string;
     description: string;
     basePrice: number;
-    maxAdults: number;
-    maxChildren: number;
+    maxAdults?: number;
+    maxChildren?: number;
 }
 
 export interface AdminRoomImage {

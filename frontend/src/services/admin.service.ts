@@ -21,7 +21,8 @@ export async function getActiveBanners() {
 }
 
 export async function getRoomsForBranch(branchCode: string): Promise<AdminRoom[]> {
-  const res = await fetch("http://localhost:5000/api/rooms", {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL
+  const res = await fetch(`${apiUrl}/api/rooms`, {
     credentials: "include",
     headers: {
       "X-Branch-Code": branchCode,

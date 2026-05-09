@@ -994,3 +994,48 @@ Setelah container hidup:
 - Super Admin tidak boleh mencampuri operational tenant.
 - SPV bertanggung jawab untuk price.
 - FO boleh menjalankan operasional room, tetapi tidak boleh mengubah price.
+
+## Update Arsitektur Booking (Room-Type Based)
+
+Patch terbaru memindahkan arsitektur booking dari room-based ke room-type-based agar sesuai OTA flow.
+
+- Input booking public sekarang: `roomTypeId` + `ratePlanId` (bukan `roomId`).
+- Entity `Booking` tenant:
+  - `RoomTypeId` wajib
+  - `RoomId` nullable (akan diassign setelah payment sukses)
+- Assignment kamar dipindahkan ke service khusus: `RoomAssignmentService`.
+- Payment success flow sekarang:
+  1. validasi pembayaran
+  2. assign kamar otomatis berdasarkan `RoomTypeId`
+  3. lock inventory room-level (`RoomAvailability`)
+  4. finalisasi status booking/payment dalam transaksi yang sama
+- Ditambahkan operational room status:
+  - `clean`, `dirty`, `occupied`, `cleaning`, `maintenance`, `out_of_order`
+- Ditambahkan endpoint housekeeping di `/api/rooms`:
+  - `PATCH /{id}/checkout` -> room menjadi `dirty`
+  - `PATCH /{id}/cleaning` -> `dirty` ke `cleaning`
+  - `PATCH /{id}/clean` -> `cleaning` ke `clean`
+- Room assignable hanya jika:
+  - `Room.Status = available`
+  - `Room.OperationalStatus = clean`
+- Menjaga multi-tenant existing (`ITenantDbFactory`) dan tetap menjaga query/index availability yang sudah ada.
+
+### Improvement Booking Flow (OTA/PMS)
+
+Patch lanjutan menambahkan konsistensi flow `booking -> payment -> inventory -> assignment -> email`:
+
+- **Email confirmation dipindah ke payment success webhook**, bukan saat pending booking dibuat.
+- **Pending hold expiration**:
+  - booking pending punya `HoldUntilUtc`
+  - background service auto-expire pending yang lewat hold time
+  - pending expired tidak lagi menghitung inventory aktif
+- **BookingGroup**:
+  - multi-room checkout menghasilkan 1 `BookingGroupCode` (`ORD-...`)
+  - item booking tetap per kamar, tetapi pembayaran/webhook bisa resolve via group code
+  - untuk guest flow tersedia endpoint aggregate `POST /api/guest/checkout` (single request, multi item)
+- **Webhook retry safe**:
+  - dedupe kirim email via `ConfirmationEmailSentAtUtc`
+  - idempotent assignment: jika sudah confirmed, tidak assign ulang
+- **Operational turnover tetap sederhana**:
+  - room assignable hanya `Status=available` dan `OperationalStatus=clean`
+  - checkout/housekeeping flow tetap melalui endpoint room operational status.

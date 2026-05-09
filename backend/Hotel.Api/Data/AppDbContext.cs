@@ -15,6 +15,7 @@ public class AppDbContext : DbContext
     public DbSet<RatePlan> RatePlans => Set<RatePlan>();
     public DbSet<OrderDraft> OrderDrafts => Set<OrderDraft>();
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
+    public DbSet<BookingGroup> BookingGroups => Set<BookingGroup>();
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<Booking> Bookings => Set<Booking>();
     public DbSet<Payment> Payments => Set<Payment>();
@@ -42,6 +43,10 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<Booking>()
             .HasIndex(b => b.RoomId);
+        modelBuilder.Entity<Booking>()
+            .HasIndex(b => b.RoomTypeId);
+        modelBuilder.Entity<Booking>()
+            .HasIndex(b => b.BookingGroupId);
 
         modelBuilder.Entity<Booking>()
             .HasIndex(b => new { b.CheckIn, b.CheckOut });
@@ -51,6 +56,14 @@ public class AppDbContext : DbContext
             .IsUnique();
         modelBuilder.Entity<Booking>()
 .HasIndex(b => new { b.Status, b.CheckIn });
+        modelBuilder.Entity<Booking>()
+            .HasIndex(b => new { b.Status, b.HoldUntilUtc, b.RoomTypeId });
+
+        modelBuilder.Entity<BookingGroup>()
+            .HasIndex(g => g.GroupCode)
+            .IsUnique();
+        modelBuilder.Entity<BookingGroup>()
+            .HasIndex(g => new { g.Status, g.HoldUntilUtc });
 
         // ======================
         // ROOM
@@ -61,6 +74,8 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<Room>()
             .HasIndex(r => r.RoomTypeId);
+        modelBuilder.Entity<Room>()
+            .HasIndex(r => new { r.RoomTypeId, r.Status, r.OperationalStatus });
 
         modelBuilder.Entity<RatePlan>()
             .HasIndex(rp => new { rp.RoomTypeId, rp.IsActive });
@@ -98,13 +113,32 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Booking>()
             .HasOne(b => b.Room)
             .WithMany(r => r.Bookings)
-            .HasForeignKey(b => b.RoomId);
+            .HasForeignKey(b => b.RoomId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<Booking>()
+            .HasOne(b => b.RoomType)
+            .WithMany()
+            .HasForeignKey(b => b.RoomTypeId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         // Booking → Customer
         modelBuilder.Entity<Booking>()
             .HasOne(b => b.Customer)
             .WithMany(c => c.Bookings)
             .HasForeignKey(b => b.CustomerId);
+
+        modelBuilder.Entity<BookingGroup>()
+            .HasOne(g => g.Customer)
+            .WithMany()
+            .HasForeignKey(g => g.CustomerId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<Booking>()
+            .HasOne(b => b.BookingGroup)
+            .WithMany(g => g.Bookings)
+            .HasForeignKey(b => b.BookingGroupId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<RoomTypeFacility>()
             .HasOne(rtf => rtf.RoomType)

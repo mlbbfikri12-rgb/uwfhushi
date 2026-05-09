@@ -9,6 +9,13 @@ export type AddOrderItemPayload = {
 export type OrderCurrent = {
   orderDraftId: string;
   items: {
+    bedType: string;
+    capacity: number;
+    MaxAdults?: number;
+    MaxChildren?: number;
+    isBreakFast: boolean;
+    isRefundable: boolean;
+    image: string;
     id: string;
     roomTypeId: string;
     ratePlanId: string;
