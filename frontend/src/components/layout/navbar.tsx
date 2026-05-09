@@ -7,7 +7,7 @@ const NAV_LINKS = [
   { label: "Special Offers", href: "/#special-offers" },
   { label: "Brands", href: "/#brands" },
   { label: "Blog", href: "/#blog" },
-  { label: "My Booking", href: "/booking" },
+  { label: "My Booking", href: "/#booking" },
 ];
 
 export function Navbar() {
