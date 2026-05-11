@@ -299,6 +299,54 @@ namespace Hotel.Api.Migrations.Tenant
                     b.ToTable("Payments");
                 });
 
+            modelBuilder.Entity("Hotel.Api.Entities.Tenant.PaymentEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("GrossAmount")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("MappedStatus")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("OrderId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PaymentType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ProcessingStatus")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TransactionId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TransactionStatus")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.HasIndex("OrderId", "TransactionId");
+
+                    b.ToTable("PaymentEvents");
+                });
+
             modelBuilder.Entity("Hotel.Api.Entities.Tenant.RatePlan", b =>
                 {
                     b.Property<Guid>("Id")

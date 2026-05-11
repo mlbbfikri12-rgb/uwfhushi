@@ -8,8 +8,8 @@ const nextConfig = {
         hostname: "images.unsplash.com",
       },
       {
-        protocol: "https",
-        hostname: "argillaceous-gwenn-overindulgent.ngrok-free.dev",
+        protocol: "http",
+        hostname: "localhost",
         pathname: "/uploads/**",
       },
     ],

@@ -140,6 +140,7 @@ if (!isSeedPrice)
     builder.Services.AddScoped<IRoomManagementService, RoomManagementService>();
     builder.Services.AddScoped<IRoomAssignmentService, RoomAssignmentService>();
     builder.Services.AddScoped<IRatePlanAdminService, RatePlanAdminService>();
+    builder.Services.AddScoped<IAdminBookingService, AdminBookingService>();
     builder.Services.AddScoped<ITenantSeedService, TenantSeedService>();
 }
 
@@ -162,8 +163,11 @@ builder.Services.AddScoped<IHotelAdminService, HotelAdminService>();
 builder.Services.AddScoped<IBannerService, BannerService>();
 builder.Services.AddSingleton<EmailQueue>();
 builder.Services.AddSingleton<IEmailQueue>(sp => sp.GetRequiredService<EmailQueue>());
+builder.Services.AddSingleton<HotelPriceSummaryUpdateQueue>();
+builder.Services.AddSingleton<IHotelPriceSummaryUpdater>(sp => sp.GetRequiredService<HotelPriceSummaryUpdateQueue>());
 builder.Services.AddHostedService<EmailBackgroundService>();
 builder.Services.AddHostedService<PendingBookingExpiryBackgroundService>();
+builder.Services.AddHostedService<HotelPriceSummaryUpdateWorker>();
 builder.Services.AddSingleton<IDistributedLockService, RedisDistributedLockService>();
 builder.Services.AddScoped<IBookingEmailService, BookingEmailService>();
 builder.Services.AddHttpClient<IObjectStorageService, ObjectStorageService>();
@@ -334,6 +338,8 @@ if (isSeedPrice)
 // ======================
 // PIPELINE NORMAL
 // ======================
+app.UseMiddleware<CorrelationIdMiddleware>();
+
 app.Use(async (context, next) =>
 {
     try

@@ -1039,3 +1039,24 @@ Patch lanjutan menambahkan konsistensi flow `booking -> payment -> inventory -> 
 - **Operational turnover tetap sederhana**:
   - room assignable hanya `Status=available` dan `OperationalStatus=clean`
   - checkout/housekeeping flow tetap melalui endpoint room operational status.
+
+### Production Hardening Update
+
+Patch hardening terbaru menambahkan fondasi operasional tanpa rewrite arsitektur:
+
+- Backend:
+  - `CorrelationIdMiddleware` untuk `X-Correlation-Id` request/response dan log scope.
+  - `PaymentEvents` tenant table untuk audit webhook/payment event.
+  - Admin read endpoint:
+    - `GET /api/admin/bookings/groups`
+    - `GET /api/admin/bookings/groups/{id}`
+    - `GET /api/admin/bookings/payment-events`
+  - `OrderService` sekarang auto-create tenant customer dari `CustomerGlobal` saat authenticated user pertama kali add order di cabang baru.
+  - `HotelPriceSummaries` auto-update via in-process queue `IHotelPriceSummaryUpdater`; `dotnet seed-price` tetap hanya untuk repair/backfill.
+  - Audit teknis ada di `docs/backend-audit.md` dan `docs/performance-review.md`.
+- Frontend:
+  - Booking draft guest diubah menjadi typed mini cart dengan versioning, safe parser, stable key, merge helper, totals, dan guest checkout payload builder.
+  - Authenticated flow tetap memakai backend order draft sebagai source of truth.
+  - Axios hanya mewajibkan `X-Branch-Code` untuk endpoint tenant-bound; public/master endpoint bisa dipakai tanpa branch aktif.
+  - React Query memakai query key factory dan default cache yang lebih stabil.
+  - Audit frontend ada di `docs/frontend-audit.md` dan `docs/frontend-performance-review.md`.

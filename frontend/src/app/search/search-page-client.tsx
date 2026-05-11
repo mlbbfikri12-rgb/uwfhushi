@@ -17,6 +17,7 @@ import type {
 } from "@/types/hotel-search";
 
 import Footer from "../components/Footer";
+import { getImageUrl } from "@/utils/ImageCombineUrl";
 
 type SearchPageClientProps = {
   searchParams: Record<string, string | string[] | undefined>;
@@ -31,12 +32,6 @@ function asString(value: string | string[] | undefined) {
 function asNumber(value: string | string[] | undefined, fallback: number) {
   const parsed = Number(asString(value));
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function toImageUrl(url: string) {
-  return /^https?:\/\//i.test(url)
-    ? url
-    : "https://images.unsplash.com/photo-1566073771259-6a8506099945?w=1200&q=80";
 }
 
 function SkeletonGrid() {
@@ -197,7 +192,7 @@ export default function SearchPageClient({
                     {/* IMAGE */}
                     <div className="relative h-48 w-full overflow-hidden">
                       <Image
-                        src={toImageUrl(hotel.image)}
+                        src={getImageUrl(hotel.image)}
                         alt={hotel.name}
                         fill
                         sizes="(max-width: 768px) 100vw, 33vw"

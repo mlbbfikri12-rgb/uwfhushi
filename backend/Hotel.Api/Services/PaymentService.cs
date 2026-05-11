@@ -54,6 +54,27 @@ public class PaymentService : IPaymentService
 
         await using var _db = await _tenantDbFactory.CreateAsync(branchCode, ct);
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        var mappedStatus = MapMidtransStatus(dto.TransactionStatus);
+        var paymentEvent = new PaymentEvent
+        {
+            Id = Guid.NewGuid(),
+            OrderId = dto.OrderId,
+            TransactionId = dto.TransactionId,
+            PaymentType = dto.PaymentType,
+            TransactionStatus = dto.TransactionStatus,
+            MappedStatus = mappedStatus,
+            GrossAmount = dto.GrossAmount,
+            ProcessingStatus = "processing",
+            CreatedAt = DateTime.UtcNow
+        };
+        _db.PaymentEvents.Add(paymentEvent);
+
+        _logger.LogInformation(
+            "Payment webhook received. BranchCode={BranchCode}, WebhookOrderId={WebhookOrderId}, TransactionId={TransactionId}, PaymentStatus={PaymentStatus}",
+            branchCode,
+            dto.OrderId,
+            dto.TransactionId,
+            mappedStatus);
 
         var branch = await _masterDb.Branches
             .AsNoTracking()
@@ -71,9 +92,19 @@ public class PaymentService : IPaymentService
             .ToListAsync(ct);
 
         if (bookings.Count == 0)
+        {
+            paymentEvent.ProcessingStatus = "failed";
+            paymentEvent.ErrorMessage = "Booking not found";
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            _logger.LogWarning(
+                "Invalid payment webhook. Booking not found. BranchCode={BranchCode}, WebhookOrderId={WebhookOrderId}, TransactionId={TransactionId}",
+                branchCode,
+                dto.OrderId,
+                dto.TransactionId);
             throw new Exception("Booking not found");
+        }
 
-        var mappedStatus = MapMidtransStatus(dto.TransactionStatus);
         Payment? lastPayment = null;
 
         foreach (var booking in bookings)
@@ -106,6 +137,15 @@ public class PaymentService : IPaymentService
                 if (booking.Status is not ("confirmed" or "paid"))
                 {
                     await _roomAssignmentService.AssignRoomAfterPaymentAsync(_db, booking, ct);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Duplicate paid webhook ignored for already confirmed booking. BookingId={BookingId}, BookingGroupId={BookingGroupId}, BranchCode={BranchCode}, TransactionId={TransactionId}",
+                        booking.Id,
+                        booking.BookingGroupId,
+                        branchCode,
+                        dto.TransactionId);
                 }
 
                 booking.Status = "confirmed";
@@ -164,11 +204,20 @@ public class PaymentService : IPaymentService
             lastPayment = payment;
         }
 
+        paymentEvent.ProcessingStatus = "processed";
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
         await _cache.RemoveByPrefixAsync($"availability:{branchCode}:");
         await _cache.RemoveByPrefixAsync($"hotel:full:{branchCode}:");
+
+        _logger.LogInformation(
+            "Payment webhook processed. BranchCode={BranchCode}, WebhookOrderId={WebhookOrderId}, TransactionId={TransactionId}, PaymentStatus={PaymentStatus}, BookingCount={BookingCount}",
+            branchCode,
+            dto.OrderId,
+            dto.TransactionId,
+            mappedStatus,
+            bookings.Count);
 
         return lastPayment ?? throw new Exception("Payment not processed");
     }

@@ -16,15 +16,35 @@ export const api = axios.create({
   },
 });
 
+function requiresBranchHeader(url: string) {
+  const path = url.split("?")[0] ?? "";
+
+  return (
+    path.startsWith("/api/order") ||
+    path.startsWith("/api/booking") ||
+    path.startsWith("/api/guest/checkout") ||
+    path.startsWith("/api/rooms") ||
+    path.startsWith("/api/room-types") ||
+    path.startsWith("/api/admin/bookings") ||
+    path.startsWith("/api/admin/room-types") ||
+    path.startsWith("/api/admin/rate-plans")
+  );
+}
+
 api.interceptors.request.use((config) => {
   const branch = useBranchStore.getState().activeBranch;
+  const url = config.url ?? "";
 
-  if (!branch) {
+  if (branch) {
+    config.headers["X-Branch-Code"] = branch;
+    return config;
+  }
+
+  if (requiresBranchHeader(url)) {
     return Promise.reject(
       new Error("Select a hotel first.")
     );
   }
-  config.headers["X-Branch-Code"] = branch;
 
   return config;
 });

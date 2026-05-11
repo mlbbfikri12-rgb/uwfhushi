@@ -41,19 +41,25 @@ public class RoomManagementService : IRoomManagementService
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly CacheSettings _cacheSettings;
     private readonly BookingValidationSettings _validationSettings;
+    private readonly IHotelPriceSummaryUpdater _priceSummaryUpdater;
+    private readonly ILogger<RoomManagementService> _logger;
 
     public RoomManagementService(
         ITenantDbFactory tenantDbFactory,
         ICacheService cache,
         IHttpContextAccessor httpContextAccessor,
         IOptions<CacheSettings> cacheSettings,
-        IOptions<BookingValidationSettings> validationSettings)
+        IOptions<BookingValidationSettings> validationSettings,
+        IHotelPriceSummaryUpdater priceSummaryUpdater,
+        ILogger<RoomManagementService> logger)
     {
         _tenantDbFactory = tenantDbFactory;
         _cache = cache;
         _httpContextAccessor = httpContextAccessor;
         _cacheSettings = cacheSettings.Value;
         _validationSettings = validationSettings.Value;
+        _priceSummaryUpdater = priceSummaryUpdater;
+        _logger = logger;
     }
 
     // =========================
@@ -163,6 +169,7 @@ public class RoomManagementService : IRoomManagementService
         await db.SaveChangesAsync();
 
         await InvalidateAvailabilityCacheAsync();
+        await EnqueuePriceSummaryUpdateAsync();
 
         return ToRoomTypeDto(entity);
     }
@@ -182,6 +189,7 @@ public class RoomManagementService : IRoomManagementService
 
         await db.SaveChangesAsync();
         await InvalidateAvailabilityCacheAsync();
+        await EnqueuePriceSummaryUpdateAsync();
 
         return ToRoomTypeDto(entity);
     }
@@ -219,10 +227,22 @@ public class RoomManagementService : IRoomManagementService
     {
         await using var db = await CreateDbAsync();
 
+        var roomNumber = dto.RoomNumber.Trim();
+        if (string.IsNullOrWhiteSpace(roomNumber))
+            throw new Exception("Room number is required");
+
+        var roomTypeExists = await db.RoomTypes.AnyAsync(x => x.Id == dto.RoomTypeId);
+        if (!roomTypeExists)
+            throw new Exception("Room type not found");
+
+        var duplicate = await db.Rooms.AnyAsync(x => x.RoomNumber == roomNumber);
+        if (duplicate)
+            throw new Exception("Room number already exists");
+
         var entity = new Room
         {
             Id = Guid.NewGuid(),
-            RoomNumber = dto.RoomNumber.Trim(),
+            RoomNumber = roomNumber,
             RoomTypeId = dto.RoomTypeId,
             Status = NormalizeRoomStatus(dto.Status),
             OperationalStatus = RoomOperationalStatuses.Clean,
@@ -245,7 +265,19 @@ public class RoomManagementService : IRoomManagementService
         var entity = await db.Rooms.FirstOrDefaultAsync(x => x.Id == id);
         if (entity == null) return null;
 
-        entity.RoomNumber = dto.RoomNumber.Trim();
+        var roomNumber = dto.RoomNumber.Trim();
+        if (string.IsNullOrWhiteSpace(roomNumber))
+            throw new Exception("Room number is required");
+
+        var roomTypeExists = await db.RoomTypes.AnyAsync(x => x.Id == dto.RoomTypeId);
+        if (!roomTypeExists)
+            throw new Exception("Room type not found");
+
+        var duplicate = await db.Rooms.AnyAsync(x => x.Id != id && x.RoomNumber == roomNumber);
+        if (duplicate)
+            throw new Exception("Room number already exists");
+
+        entity.RoomNumber = roomNumber;
         entity.RoomTypeId = dto.RoomTypeId;
         entity.Status = NormalizeRoomStatus(dto.Status);
 
@@ -480,6 +512,13 @@ public class RoomManagementService : IRoomManagementService
     {
         var branchCode = GetBranchCode();
         return _cache.RemoveByPrefixAsync($"availability:{branchCode}:");
+    }
+
+    private async Task EnqueuePriceSummaryUpdateAsync()
+    {
+        var branchCode = GetBranchCode();
+        await _priceSummaryUpdater.EnqueueBranchAsync(branchCode);
+        _logger.LogInformation("Queued hotel price summary update after room type mutation. BranchCode={BranchCode}", branchCode);
     }
 
     private static void ValidateRoomType(string name, decimal price, int adult, int child)

@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<Booking> Bookings => Set<Booking>();
     public DbSet<Payment> Payments => Set<Payment>();
+    public DbSet<PaymentEvent> PaymentEvents => Set<PaymentEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -92,6 +93,11 @@ public class AppDbContext : DbContext
         // ======================
         modelBuilder.Entity<Payment>()
             .HasIndex(p => p.BookingId);
+
+        modelBuilder.Entity<PaymentEvent>()
+            .HasIndex(e => new { e.OrderId, e.TransactionId });
+        modelBuilder.Entity<PaymentEvent>()
+            .HasIndex(e => e.CreatedAt);
 
         modelBuilder.Entity<OrderDraft>()
             .HasIndex(o => new { o.CustomerId, o.Status });

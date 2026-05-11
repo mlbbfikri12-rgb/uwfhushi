@@ -8,15 +8,20 @@ namespace Hotel.Api.Tests.TestSupport;
 
 public static class TestDb
 {
-    public static AppDbContext CreateTenantDb()
+    public static DbContextOptions<AppDbContext> CreateTenantOptions(string? name = null)
     {
-        var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseInMemoryDatabase($"tenant-{Guid.NewGuid()}")
+        return new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(name ?? $"tenant-{Guid.NewGuid()}")
             .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options;
-
-        return new AppDbContext(options);
     }
+
+    public static AppDbContext CreateTenantDb()
+    {
+        return new AppDbContext(CreateTenantOptions());
+    }
+
+    public static AppDbContext CreateTenantDb(DbContextOptions<AppDbContext> options) => new(options);
 
     public static MasterDbContext CreateMasterDb()
     {
@@ -62,6 +67,35 @@ public static class TestDb
         await db.SaveChangesAsync();
 
         return (roomType, room);
+    }
+
+    public static async Task<(RoomType RoomType, Room Room, RatePlan RatePlan)> SeedRoomWithRatePlanAsync(
+        AppDbContext db,
+        string roomNumber = "101",
+        string status = "available",
+        decimal basePrice = 500000m,
+        int maxAdults = 2,
+        int maxChildren = 1)
+    {
+        var (roomType, room) = await SeedRoomAsync(db, roomNumber, status, basePrice, maxAdults, maxChildren);
+        var ratePlan = new RatePlan
+        {
+            Id = Guid.NewGuid(),
+            RoomTypeId = roomType.Id,
+            RoomType = roomType,
+            Name = "Flexible",
+            Price = basePrice,
+            IncludesBreakfast = true,
+            IsRefundable = true,
+            PaymentType = "online",
+            TermsConditions = "Test",
+            IsActive = true
+        };
+
+        db.RatePlans.Add(ratePlan);
+        await db.SaveChangesAsync();
+
+        return (roomType, room, ratePlan);
     }
 
     public static async Task<Branch> SeedBranchAsync(

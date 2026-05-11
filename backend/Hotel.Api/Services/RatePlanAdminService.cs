@@ -17,13 +17,19 @@ public class RatePlanAdminService : IRatePlanAdminService
 {
     private readonly ITenantDbFactory _tenantDbFactory;
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly IHotelPriceSummaryUpdater _priceSummaryUpdater;
+    private readonly ILogger<RatePlanAdminService> _logger;
 
     public RatePlanAdminService(
         ITenantDbFactory tenantDbFactory,
-        IHttpContextAccessor httpContextAccessor)
+        IHttpContextAccessor httpContextAccessor,
+        IHotelPriceSummaryUpdater priceSummaryUpdater,
+        ILogger<RatePlanAdminService> logger)
     {
         _tenantDbFactory = tenantDbFactory;
         _httpContextAccessor = httpContextAccessor;
+        _priceSummaryUpdater = priceSummaryUpdater;
+        _logger = logger;
     }
 
     private string GetBranchCode()
@@ -103,6 +109,7 @@ public class RatePlanAdminService : IRatePlanAdminService
 
         db.RatePlans.Add(entity);
         await db.SaveChangesAsync(cancellationToken);
+        await EnqueuePriceSummaryUpdateAsync(cancellationToken);
 
         return Map(entity);
     }
@@ -134,6 +141,7 @@ public class RatePlanAdminService : IRatePlanAdminService
         entity.IsActive = dto.IsActive;
 
         await db.SaveChangesAsync(cancellationToken);
+        await EnqueuePriceSummaryUpdateAsync(cancellationToken);
 
         return Map(entity);
     }
@@ -155,6 +163,7 @@ public class RatePlanAdminService : IRatePlanAdminService
 
         db.RatePlans.Remove(entity);
         await db.SaveChangesAsync(cancellationToken);
+        await EnqueuePriceSummaryUpdateAsync(cancellationToken);
 
         return true;
     }
@@ -210,5 +219,12 @@ public class RatePlanAdminService : IRatePlanAdminService
             TermsConditions = entity.TermsConditions,
             IsActive = entity.IsActive
         };
+    }
+
+    private async Task EnqueuePriceSummaryUpdateAsync(CancellationToken cancellationToken)
+    {
+        var branchCode = GetBranchCode();
+        await _priceSummaryUpdater.EnqueueBranchAsync(branchCode, cancellationToken);
+        _logger.LogInformation("Queued hotel price summary update after rate plan mutation. BranchCode={BranchCode}", branchCode);
     }
 }

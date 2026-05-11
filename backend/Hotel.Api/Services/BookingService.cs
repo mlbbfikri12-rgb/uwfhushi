@@ -195,9 +195,7 @@ public class BookingService : IBookingService
         var branchCode = GetBranchCode();
         await using var db = await _tenantDbFactory.CreateAsync(branchCode);
 
-        var customer = await db.Customers
-            .FirstOrDefaultAsync(c => c.GlobalCustomerId == customerGlobalId)
-            ?? throw new Exception("Customer not found in this branch");
+        var customer = await GetOrCreateTenantCustomerAsync(db, globalCustomer);
 
         var draft = await db.OrderDrafts
             .Include(o => o.Items).ThenInclude(i => i.RatePlan)
@@ -356,8 +354,7 @@ public class BookingService : IBookingService
                 await _masterDb.SaveChangesAsync();
             }
 
-            var customer = await db.Customers
-                .FirstOrDefaultAsync(c => c.GlobalCustomerId == globalCustomer.Id);
+            var customer = await GetOrCreateTenantCustomerAsync(db, globalCustomer);
 
             if (customer == null)
             {
@@ -536,8 +533,7 @@ public class BookingService : IBookingService
                 await _masterDb.SaveChangesAsync();
             }
 
-            var customer = await db.Customers
-                .FirstOrDefaultAsync(c => c.GlobalCustomerId == globalCustomer.Id);
+            var customer = await GetOrCreateTenantCustomerAsync(db, globalCustomer);
 
             if (customer == null)
             {
@@ -626,7 +622,14 @@ public class BookingService : IBookingService
                 await tenantTransaction.RollbackAsync();
             if (existingMasterTransaction == null)
                 await masterTransaction.RollbackAsync();
-            throw new Exception("Room not available");
+            var pg = FindPostgresException(ex);
+
+            throw new Exception($@"
+UNIQUE VIOLATION
+Constraint: {pg?.ConstraintName}
+Detail: {pg?.Detail}
+Message: {pg?.MessageText}
+");
         }
         catch (Exception ex) when (IsSerializationFailure(ex))
         {
@@ -663,6 +666,43 @@ public class BookingService : IBookingService
         }
     }
 
+    private async Task<Customer> GetOrCreateTenantCustomerAsync(
+    AppDbContext db,
+    CustomerGlobal globalCustomer)
+    {
+        var customer = await db.Customers
+            .FirstOrDefaultAsync(c => c.GlobalCustomerId == globalCustomer.Id);
+
+        if (customer != null)
+            return customer;
+
+        customer = new Customer
+        {
+            Id = Guid.NewGuid(),
+            GlobalCustomerId = globalCustomer.Id,
+            Name = globalCustomer.Name,
+            Email = globalCustomer.Email,
+            Phone = globalCustomer.Phone,
+            IsVerified = globalCustomer.IsVerified,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        db.Customers.Add(customer);
+
+        try
+        {
+            await db.SaveChangesAsync();
+            return customer;
+        }
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            db.Entry(customer).State = EntityState.Detached;
+
+            return await db.Customers
+                .FirstAsync(c => c.GlobalCustomerId == globalCustomer.Id);
+        }
+    }
+
     private async Task EnsureRoomTypeInventoryAsync(
         AppDbContext db,
         Guid roomTypeId,
@@ -686,7 +726,7 @@ public class BookingService : IBookingService
 
         var totalSellableRooms = candidateRoomIds.Count;
         if (totalSellableRooms <= 0)
-            throw new InvalidOperationException("Room not available");
+            throw new InvalidOperationException("Room not available, please try another date");
 
         var activeBookingsCount = await db.Bookings
             .AsNoTracking()
@@ -701,7 +741,7 @@ public class BookingService : IBookingService
                 b.CheckOut > checkInDate);
 
         if (totalSellableRooms - activeBookingsCount < requestedRooms)
-            throw new InvalidOperationException("Room not available");
+            throw new InvalidOperationException("Room not available, please try another date");
     }
 
     private static bool IsUniqueConstraintViolation(DbUpdateException exception)

@@ -1,6 +1,7 @@
 "use client";
 
 import { useForm } from "react-hook-form";
+import { appLogger } from "@/lib/logger";
 
 type Props = {
   roomId: string;
@@ -30,7 +31,7 @@ export function BookingForm({
   const { register, handleSubmit } = useForm<BookingFormValues>();
 
   const onSubmit = (data: BookingFormValues) => {
-    console.log("BOOKING:", {
+    appLogger.info("Booking form submitted", {
       ...data,
       roomId,
       checkIn,

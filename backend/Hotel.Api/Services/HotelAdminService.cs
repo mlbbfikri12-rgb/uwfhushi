@@ -23,8 +23,18 @@ public interface IHotelAdminService
 public class HotelAdminService : IHotelAdminService
 {
     private readonly MasterDbContext _db;
+    private readonly IHotelPriceSummaryUpdater _priceSummaryUpdater;
+    private readonly ILogger<HotelAdminService> _logger;
 
-    public HotelAdminService(MasterDbContext db) => _db = db;
+    public HotelAdminService(
+        MasterDbContext db,
+        IHotelPriceSummaryUpdater priceSummaryUpdater,
+        ILogger<HotelAdminService> logger)
+    {
+        _db = db;
+        _priceSummaryUpdater = priceSummaryUpdater;
+        _logger = logger;
+    }
 
     public async Task<IReadOnlyCollection<HotelResponseDto>> GetAsync(string? q, CancellationToken cancellationToken = default)
     {
@@ -86,6 +96,7 @@ public class HotelAdminService : IHotelAdminService
 
         _db.Hotels.Add(entity);
         await _db.SaveChangesAsync(cancellationToken);
+        await EnqueuePriceSummaryUpdateAsync(entity.BranchCode, cancellationToken);
         return (await GetByIdAsync(entity.Id, cancellationToken))!;
     }
 
@@ -109,6 +120,7 @@ public class HotelAdminService : IHotelAdminService
         hotel.IsActive = dto.IsActive;
 
         await _db.SaveChangesAsync(cancellationToken);
+        await EnqueuePriceSummaryUpdateAsync(hotel.BranchCode, cancellationToken);
         return await GetByIdAsync(id, cancellationToken);
     }
 
@@ -118,6 +130,7 @@ public class HotelAdminService : IHotelAdminService
         if (hotel == null) return false;
         hotel.IsActive = false;
         await _db.SaveChangesAsync(cancellationToken);
+        await EnqueuePriceSummaryUpdateAsync(hotel.BranchCode, cancellationToken);
         return true;
     }
 
@@ -299,5 +312,11 @@ public class HotelAdminService : IHotelAdminService
                     Distance = string.IsNullOrWhiteSpace(x.Distance) ? $"{x.DistanceKm:0.##} km" : x.Distance
                 }).ToList()
         };
+    }
+
+    private async Task EnqueuePriceSummaryUpdateAsync(string branchCode, CancellationToken cancellationToken)
+    {
+        await _priceSummaryUpdater.EnqueueBranchAsync(branchCode, cancellationToken);
+        _logger.LogInformation("Queued hotel price summary update after hotel mutation. BranchCode={BranchCode}", branchCode);
     }
 }

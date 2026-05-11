@@ -1,11 +1,6 @@
 import { PublicBlog } from "@/types/home";
+import { getImageUrl } from "@/utils/ImageCombineUrl";
 import Image from "next/image";
-
-function toImageUrl(url: string) {
-  return /^https?:\/\//i.test(url)
-    ? url
-    : "https://images.unsplash.com/photo-1566073771259-6a8506099945?w=1200&q=80";
-}
 
 type Props = {
   blogs: PublicBlog[];
@@ -24,7 +19,7 @@ export default function Blogs({ blogs }: Props) {
           >
             <div className="relative h-56 overflow-hidden">
               <Image
-                src={toImageUrl(blog.imageUrl)}
+                src={getImageUrl(blog.imageUrl)}
                 alt={blog.title}
                 fill
                 className="object-cover transition-transform duration-500 group-hover:scale-105"

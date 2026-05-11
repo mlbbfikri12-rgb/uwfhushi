@@ -17,9 +17,9 @@ public class TenantServiceTests
             HttpContext = new DefaultHttpContext()
         };
 
-        var service = new TenantService(httpContextAccessor, db);
+        var service = new TenantService(httpContextAccessor, db, new NoopCacheService());
 
-        var ex = Assert.Throws<TenantResolutionException>(() => service.GetConnectionString());
+        var ex = await Assert.ThrowsAsync<TenantResolutionException>(() => service.GetConnectionStringAsync());
 
         Assert.Equal(StatusCodes.Status400BadRequest, ex.StatusCode);
         Assert.Equal("X-Branch-Code header is missing", ex.Message);
@@ -32,9 +32,9 @@ public class TenantServiceTests
         await TestDb.SeedBranchAsync(db, "SMG");
         var context = new DefaultHttpContext();
         context.Request.Headers["X-Branch-Code"] = "smg";
-        var service = new TenantService(new HttpContextAccessor { HttpContext = context }, db);
+        var service = new TenantService(new HttpContextAccessor { HttpContext = context }, db, new NoopCacheService());
 
-        var connectionString = service.GetConnectionString();
+        var connectionString = await service.GetConnectionStringAsync();
 
         Assert.Contains("Database=hotel_smg", connectionString);
     }
@@ -52,11 +52,11 @@ public class TenantServiceTests
             new Claim("allowed_branch_ids", Guid.NewGuid().ToString())
         }, "jwt"));
 
-        var service = new TenantService(new HttpContextAccessor { HttpContext = context }, db);
+        var service = new TenantService(new HttpContextAccessor { HttpContext = context }, db, new NoopCacheService());
 
-        var ex = Assert.Throws<TenantResolutionException>(() => service.GetConnectionString());
+        var ex = await Assert.ThrowsAsync<TenantResolutionException>(() => service.GetConnectionStringAsync());
 
         Assert.Equal(StatusCodes.Status403Forbidden, ex.StatusCode);
-        Assert.Equal("Staff is not allowed to access this branch", ex.Message);
+        Assert.Equal("You are not allowed to access this branch", ex.Message);
     }
 }

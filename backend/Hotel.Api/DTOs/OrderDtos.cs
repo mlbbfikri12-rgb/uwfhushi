@@ -25,6 +25,7 @@ public class OrderItemDto
     public string RatePlanName { get; set; } = string.Empty;
     public DateTime CheckIn { get; set; }
     public DateTime CheckOut { get; set; }
+    public string Image { get; set; } = string.Empty;
     public int TotalRooms { get; set; }
     public decimal PricePerNight { get; set; }
     public decimal TotalPrice { get; set; }

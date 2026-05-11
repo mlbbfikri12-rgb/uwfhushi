@@ -13,10 +13,24 @@ public interface IRoomAssignmentService
 
 public class RoomAssignmentService : IRoomAssignmentService
 {
+    private readonly ILogger<RoomAssignmentService> _logger;
+
+    public RoomAssignmentService(ILogger<RoomAssignmentService> logger)
+    {
+        _logger = logger;
+    }
+
     public async Task AssignRoomAfterPaymentAsync(AppDbContext db, Booking booking, CancellationToken ct = default)
     {
         if (booking.RoomId.HasValue)
+        {
+            _logger.LogInformation(
+                "Room assignment skipped because booking already has room. BookingId={BookingId}, BookingGroupId={BookingGroupId}, RoomId={RoomId}",
+                booking.Id,
+                booking.BookingGroupId,
+                booking.RoomId);
             return;
+        }
 
         var checkInDate = booking.CheckIn.Date;
         var checkOutDate = booking.CheckOut.Date;
@@ -90,8 +104,23 @@ public class RoomAssignmentService : IRoomAssignmentService
                 }
             }
 
+            _logger.LogInformation(
+                "Room assigned after payment. BookingId={BookingId}, BookingGroupId={BookingGroupId}, RoomTypeId={RoomTypeId}, RoomId={RoomId}",
+                booking.Id,
+                booking.BookingGroupId,
+                booking.RoomTypeId,
+                room.Id);
+
             return;
         }
+
+        _logger.LogWarning(
+            "Room assignment failed because no clean available room was found. BookingId={BookingId}, BookingGroupId={BookingGroupId}, RoomTypeId={RoomTypeId}, CheckIn={CheckIn}, CheckOut={CheckOut}",
+            booking.Id,
+            booking.BookingGroupId,
+            booking.RoomTypeId,
+            booking.CheckIn,
+            booking.CheckOut);
 
         throw new InvalidOperationException("No clean available room can be assigned for this booking");
     }
@@ -114,6 +143,12 @@ public class RoomAssignmentService : IRoomAssignmentService
         booking.RoomId = room.Id;
         room.Status = "occupied";
         room.OperationalStatus = RoomOperationalStatuses.Occupied;
+
+        _logger.LogInformation(
+            "Room manually assigned to booking. BookingId={BookingId}, RoomTypeId={RoomTypeId}, RoomId={RoomId}",
+            booking.Id,
+            booking.RoomTypeId,
+            room.Id);
     }
 
     public async Task AutoAssignRoomsAsync(AppDbContext db, DateTime dateUtc, CancellationToken ct = default)
@@ -130,6 +165,14 @@ public class RoomAssignmentService : IRoomAssignmentService
         foreach (var booking in bookings)
         {
             await AssignRoomAfterPaymentAsync(db, booking, ct);
+        }
+
+        if (bookings.Count > 0)
+        {
+            _logger.LogInformation(
+                "Auto room assignment completed. TargetDate={TargetDate}, BookingCount={BookingCount}",
+                targetDate,
+                bookings.Count);
         }
     }
 }

@@ -21,14 +21,16 @@
 // };
 
 export type BookingDraft = {
+    version: 1;
     slug: string;
+    branchCode?: string;
     checkIn: string;
     checkOut: string;
-
     items: BookingDraftItem[];
 };
 
 export type BookingDraftItem = {
+    key: string;
     roomTypeId: string;
     ratePlanId: string;
 

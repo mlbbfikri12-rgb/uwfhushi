@@ -2,6 +2,7 @@ using Hotel.Api.Data;
 using Hotel.Api.DTOs;
 using Hotel.Api.Entities.Tenant;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Hotel.Api.Services;
 
@@ -16,13 +17,19 @@ public class OrderService : IOrderService
 {
     private readonly ITenantDbFactory _tenantDbFactory;
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly MasterDbContext _masterDb;
+    private readonly ILogger<OrderService> _logger;
 
     public OrderService(
         ITenantDbFactory tenantDbFactory,
-        IHttpContextAccessor httpContextAccessor)
+        IHttpContextAccessor httpContextAccessor,
+        MasterDbContext masterDb,
+        ILogger<OrderService> logger)
     {
         _tenantDbFactory = tenantDbFactory;
         _httpContextAccessor = httpContextAccessor;
+        _masterDb = masterDb;
+        _logger = logger;
     }
 
     private string GetBranchCode()
@@ -40,10 +47,6 @@ public class OrderService : IOrderService
         var branchCode = GetBranchCode();
 
         await using var _db = await _tenantDbFactory.CreateAsync(branchCode, cancellationToken);
-
-        var customer = await _db.Customers.FirstOrDefaultAsync(c => c.GlobalCustomerId == customerGlobalId, cancellationToken);
-        if (customer == null)
-            throw new Exception("Customer not found in this branch");
 
         var checkIn = DateTime.SpecifyKind(dto.CheckIn.Date, DateTimeKind.Utc);
         var checkOut = DateTime.SpecifyKind(dto.CheckOut.Date, DateTimeKind.Utc);
@@ -66,6 +69,8 @@ public class OrderService : IOrderService
 
         if (ratePlan == null)
             throw new Exception("Rate plan not found");
+
+        var customer = await GetOrCreateTenantCustomerAsync(_db, customerGlobalId, branchCode, cancellationToken);
 
         var draft = await _db.OrderDrafts
             .Include(o => o.Items)
@@ -105,6 +110,14 @@ public class OrderService : IOrderService
 
         await _db.SaveChangesAsync(cancellationToken);
 
+        _logger.LogInformation(
+            "Order draft item added. BranchCode={BranchCode}, CustomerId={CustomerId}, RoomTypeId={RoomTypeId}, RatePlanId={RatePlanId}, TotalRooms={TotalRooms}",
+            branchCode,
+            customer.Id,
+            dto.RoomTypeId,
+            dto.RatePlanId,
+            dto.TotalRooms);
+
         return await GetCurrentAsync(customerGlobalId, cancellationToken);
     }
 
@@ -116,48 +129,51 @@ public class OrderService : IOrderService
 
         var customer = await _db.Customers.FirstOrDefaultAsync(c => c.GlobalCustomerId == customerGlobalId, cancellationToken);
         if (customer == null)
-            throw new Exception("Customer not found in this branch");
+        {
+            _logger.LogInformation(
+                "Order current requested before tenant customer exists. BranchCode={BranchCode}, CustomerGlobalId={CustomerGlobalId}",
+                branchCode,
+                customerGlobalId);
+
+            return EmptyOrder();
+        }
 
         var draft = await _db.OrderDrafts
             .AsNoTracking()
-            .Include(o => o.Items)
-            .ThenInclude(i => i.RoomType)
-            .Include(o => o.Items)
-            .ThenInclude(i => i.RatePlan)
-            .FirstOrDefaultAsync(o => o.CustomerId == customer.Id && o.Status == "draft", cancellationToken);
+            .Where(o => o.CustomerId == customer.Id && o.Status == "draft")
+            .Select(o => new
+            {
+                o.Id,
+                Items = o.Items
+                    .OrderBy(i => i.CreatedAt)
+                    .Select(i => new OrderItemDto
+                    {
+                        Id = i.Id,
+                        RoomTypeId = i.RoomTypeId,
+                        RatePlanId = i.RatePlanId,
+                        RoomTypeName = i.RoomType != null ? i.RoomType.Name : string.Empty,
+                        RatePlanName = i.RatePlan != null ? i.RatePlan.Name : string.Empty,
+                        CheckIn = i.CheckIn,
+                        CheckOut = i.CheckOut,
+                        Image = i.RoomType != null ? i.RoomType.ImageUrl : string.Empty,
+                        TotalRooms = i.TotalRooms,
+                        PricePerNight = i.PricePerNight,
+                        TotalPrice = i.TotalPrice
+                    })
+                    .ToList()
+            })
+            .FirstOrDefaultAsync(cancellationToken);
 
         if (draft == null)
         {
-            return new OrderCurrentDto
-            {
-                OrderDraftId = Guid.Empty,
-                Items = Array.Empty<OrderItemDto>(),
-                GrandTotal = 0m
-            };
+            return EmptyOrder();
         }
-
-        var items = draft.Items
-            .OrderBy(i => i.CreatedAt)
-            .Select(i => new OrderItemDto
-            {
-                Id = i.Id,
-                RoomTypeId = i.RoomTypeId,
-                RatePlanId = i.RatePlanId,
-                RoomTypeName = i.RoomType?.Name ?? string.Empty,
-                RatePlanName = i.RatePlan?.Name ?? string.Empty,
-                CheckIn = i.CheckIn,
-                CheckOut = i.CheckOut,
-                TotalRooms = i.TotalRooms,
-                PricePerNight = i.PricePerNight,
-                TotalPrice = i.TotalPrice
-            })
-            .ToList();
 
         return new OrderCurrentDto
         {
             OrderDraftId = draft.Id,
-            Items = items,
-            GrandTotal = items.Sum(i => i.TotalPrice)
+            Items = draft.Items,
+            GrandTotal = draft.Items.Sum(i => i.TotalPrice)
         };
     }
 
@@ -187,6 +203,90 @@ public class OrderService : IOrderService
 
         await _db.SaveChangesAsync(cancellationToken);
 
+        _logger.LogInformation(
+            "Order draft item deleted. BranchCode={BranchCode}, CustomerId={CustomerId}, OrderItemId={OrderItemId}",
+            branchCode,
+            customer.Id,
+            orderItemId);
+
         return await GetCurrentAsync(customerGlobalId, cancellationToken);
+    }
+
+    private async Task<Customer> GetOrCreateTenantCustomerAsync(
+        AppDbContext db,
+        Guid customerGlobalId,
+        string branchCode,
+        CancellationToken cancellationToken)
+    {
+        var existing = await db.Customers
+            .FirstOrDefaultAsync(c => c.GlobalCustomerId == customerGlobalId, cancellationToken);
+
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        var globalCustomer = await _masterDb.CustomersGlobal
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == customerGlobalId, cancellationToken);
+
+        if (globalCustomer == null)
+        {
+            throw new Exception("Customer account not found");
+        }
+
+        var customer = new Customer
+        {
+            Id = Guid.NewGuid(),
+            GlobalCustomerId = globalCustomer.Id,
+            Name = globalCustomer.Name,
+            Email = globalCustomer.Email,
+            Phone = globalCustomer.Phone,
+            IsVerified = globalCustomer.IsVerified,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        db.Customers.Add(customer);
+
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+
+            _logger.LogInformation(
+                "Tenant customer auto-created from order flow. BranchCode={BranchCode}, CustomerId={CustomerId}, CustomerGlobalId={CustomerGlobalId}",
+                branchCode,
+                customer.Id,
+                customer.GlobalCustomerId);
+
+            return customer;
+        }
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            db.Entry(customer).State = EntityState.Detached;
+
+            _logger.LogWarning(
+                ex,
+                "Tenant customer auto-create raced with another request. BranchCode={BranchCode}, CustomerGlobalId={CustomerGlobalId}",
+                branchCode,
+                customerGlobalId);
+
+            return await db.Customers.FirstAsync(c => c.GlobalCustomerId == customerGlobalId, cancellationToken);
+        }
+    }
+
+    private static bool IsUniqueConstraintViolation(DbUpdateException ex)
+    {
+        return ex.InnerException is PostgresException postgresException &&
+               postgresException.SqlState == PostgresErrorCodes.UniqueViolation;
+    }
+
+    private static OrderCurrentDto EmptyOrder()
+    {
+        return new OrderCurrentDto
+        {
+            OrderDraftId = Guid.Empty,
+            Items = Array.Empty<OrderItemDto>(),
+            GrandTotal = 0m
+        };
     }
 }

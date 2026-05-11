@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 
 import { differenceInCalendarDays } from "date-fns";
@@ -22,12 +22,20 @@ import { getCurrentCustomer } from "@/services/auth.service";
 import { BranchRouteSync } from "@/features/tenant/components/BranchRouteSync";
 
 import { Navbar } from "@/components/layout/navbar";
+
+import { CalendarX, ArrowRight } from "lucide-react";
+import Link from "next/link";
+
 import type {
   CheckoutOrderResponse,
   GuestCheckoutResponse,
 } from "@/types/booking";
 import type { OrderCurrent } from "@/types/order";
-import { clearDraft, getDraft } from "@/utils/BookingDraftUtils";
+import {
+  buildGuestCheckoutPayload,
+  clearDraft,
+  getDraft,
+} from "@/utils/BookingDraftUtils";
 import { BookingDraftItem } from "@/types/BookingDraft";
 import {
   Calendar,
@@ -38,6 +46,11 @@ import {
   Coffee,
   ShieldCheck,
 } from "lucide-react";
+import { getImageUrl } from "@/utils/ImageCombineUrl";
+import { queryKeys } from "@/lib/query-keys";
+import { appLogger } from "@/lib/logger";
+import { formatBookingDate } from "@/utils/FormatDate";
+import { splitName } from "@/utils/SplitName";
 type GuestFormState = {
   adultCount: number;
   childCount: number;
@@ -79,6 +92,7 @@ type UIOrderItem = {
 
 export default function BookingPage() {
   const branch = useBranchStore((s) => s.activeBranch);
+  const hasSyncedDraftRef = useRef(false);
 
   const [mounted, setMounted] = useState(false);
   const [step, setStep] = useState(1);
@@ -116,7 +130,7 @@ export default function BookingPage() {
   // =========================
 
   const customerQuery = useQuery({
-    queryKey: ["customer-me"],
+    queryKey: queryKeys.customer.me,
     queryFn: getCurrentCustomer,
     retry: false,
   });
@@ -124,12 +138,27 @@ export default function BookingPage() {
   const isAuthenticated =
     customerQuery.isSuccess && Boolean(customerQuery.data?.id);
 
+  useEffect(() => {
+    if (!customerQuery.data) return;
+
+    const customer = customerQuery.data;
+
+    const { firstName, lastName } = splitName(customer.name);
+
+    setContact({
+      email: customer.email ?? "",
+      firstName: firstName ?? "",
+      lastName: lastName ?? "",
+      phone: customer.phone ?? "",
+    });
+  }, [customerQuery.data]);
+
   // =========================
   // 📦 ORDER LOGIN
   // =========================
 
   const orderQuery = useQuery({
-    queryKey: ["order-current", branch],
+    queryKey: queryKeys.order.current(branch),
     queryFn: getCurrentOrder,
     enabled: mounted && isAuthenticated && !!branch,
   });
@@ -170,7 +199,7 @@ export default function BookingPage() {
 
   const roomDetailQueries = useQueries({
     queries: draftItems.map((item) => ({
-      queryKey: ["room-detail", item.slug, item.roomTypeId],
+      queryKey: queryKeys.hotel.roomDetail(item.slug, item.roomTypeId),
       queryFn: () => getRoomDetail(item.slug, item.roomTypeId),
       enabled: !!item.slug && !!item.roomTypeId,
       staleTime: 1000 * 60 * 5,
@@ -279,22 +308,38 @@ export default function BookingPage() {
     if (!isAuthenticated) return;
     if (!draftItems.length) return;
     if (orderQuery.data?.items?.length) return;
+    if (hasSyncedDraftRef.current) return;
+
+    hasSyncedDraftRef.current = true;
 
     (async () => {
-      for (const item of draftItems) {
-        await addMutation.mutateAsync({
-          roomTypeId: item.roomTypeId,
-          ratePlanId: item.ratePlanId,
-          checkIn: item.checkIn,
-          checkOut: item.checkOut,
-          totalRooms: item.qty, // 🔥 FIX
+      try {
+        for (const item of draftItems) {
+          await addMutation.mutateAsync({
+            roomTypeId: item.roomTypeId,
+            ratePlanId: item.ratePlanId,
+            checkIn: item.checkIn,
+            checkOut: item.checkOut,
+            totalRooms: item.qty,
+          });
+        }
+
+        await orderQuery.refetch();
+        clearDraft();
+
+        appLogger.info("Guest draft synced into authenticated order", {
+          branch,
+          itemCount: draftItems.length,
+        });
+      } catch (error) {
+        hasSyncedDraftRef.current = false;
+        appLogger.error("Failed to sync guest draft into authenticated order", {
+          branch,
+          error,
         });
       }
-
-      await orderQuery.refetch();
-      clearDraft();
     })();
-  }, [mounted, isAuthenticated, draftItems, orderQuery, addMutation]);
+  }, [mounted, isAuthenticated, draftItems, orderQuery, addMutation, branch]);
 
   const bookingMutation = useMutation({
     mutationFn: async (): Promise<
@@ -313,23 +358,19 @@ export default function BookingPage() {
       }
       const customerSource = isSelfBooking ? contact : guestDetail;
 
-      return guestCheckout({
-        customerName:
-          `${customerSource.firstName} ${customerSource.lastName}`.trim(),
-        customerEmail: customerSource.email,
-        customerPhone: customerSource.phone,
-        adultCount: guest.adultCount,
-        childCount: guest.childCount,
-        paymentMethod: "mock",
-        notes: "",
-        items: orderItems.map((item) => ({
-          roomTypeId: item.roomTypeId,
-          ratePlanId: item.ratePlanId,
-          checkIn: item.checkIn,
-          checkOut: item.checkOut,
-          totalRooms: item.totalRooms,
-        })),
-      });
+      return guestCheckout(
+        buildGuestCheckoutPayload({
+          customerName:
+            `${customerSource.firstName} ${customerSource.lastName}`.trim(),
+          customerEmail: customerSource.email,
+          customerPhone: customerSource.phone,
+          adultCount: guest.adultCount,
+          childCount: guest.childCount,
+          paymentMethod: "mock",
+          notes: specialRequest,
+          draft: localDraft ?? undefined,
+        }),
+      );
     },
 
     onSuccess: (data) => {
@@ -341,10 +382,19 @@ export default function BookingPage() {
       setStep(3);
 
       toast.success("Booking berhasil");
+      appLogger.info("Booking checkout completed", {
+        branch,
+        bookingGroupCode: code,
+        bookingCount: data.bookings?.length ?? 0,
+      });
     },
 
     onError: (err: Error) => {
       toast.error(err.message || "Gagal booking");
+      appLogger.error("Booking checkout failed", {
+        branch,
+        error: err.message,
+      });
     },
   });
 
@@ -358,19 +408,55 @@ export default function BookingPage() {
 
   if (!orderItems.length && !isLoadingRooms) {
     return (
-      <main className="p-10 text-center text-red-500">
-        Tidak ada data booking
+      <main className="flex min-h-[60vh] flex-col items-center justify-center bg-white px-6 py-20 selection:bg-[#c4a661]/10 selection:text-[#050810]">
+        {/* PERBAIKAN UTAMA:
+        - ganti bg-dark dengan bg-white
+        - hapus backdrop-blur (tidak relevan di basis putih solid)
+        - sesuaikan border agar halus di basis putih
+      */}
+        <div className="relative flex w-full max-w-md flex-col items-center overflow-hidden rounded-[2.5rem] border border-slate-100 bg-white p-10 text-center shadow-[0_0_80px_-20px_rgba(196,166,97,0.1)] sm:p-12">
+          {/* Faded Gradient (UI Detail) */}
+          <div className="absolute top-0 h-32 w-full bg-gradient-to-b from-slate-50 to-transparent" />
+
+          {/* Icon Container: 
+          - ganti border-dark dengan border-slate-100
+          - ganti bg-dark dengan bg-slate-50
+          - ganti text-white/40 dengan text-slate-400
+        */}
+          <div className="relative mb-8 flex h-20 w-20 items-center justify-center rounded-full border border-slate-100 bg-slate-50 text-slate-400 shadow-inner">
+            <CalendarX size={32} strokeWidth={1} className="relative z-10" />
+          </div>
+
+          {/* Text: 
+          - ganti text-white dengan text-slate-900 (hampir hitam)
+          - ganti text-white/50 dengan text-slate-600 (abu-abu gelap)
+        */}
+          <h2 className="mb-3 text-2xl font-light tracking-wide text-slate-900">
+            Belum Ada{" "}
+            <span className="font-semibold text-[#c4a661]">Pemesanan</span>
+          </h2>
+          <p className="mb-10 text-sm font-light leading-relaxed text-slate-600">
+            Riwayat booking Anda masih kosong. Jangan biarkan liburan impian
+            Anda hanya sebatas wacana.
+          </p>
+
+          {/* Call to Action (CTA):
+          - Gaya tombol dipertahankan, tapi text color disesuaikan
+        */}
+          <Link
+            href="/"
+            className="group flex w-full items-center justify-center gap-2 rounded-xl bg-[#c4a661] px-6 py-3.5 text-sm font-semibold text-[#050810] shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)] transition-all hover:bg-[#d4b671] hover:shadow-[0_0_20px_rgba(196,166,97,0.3)]"
+          >
+            Cari Penginapan Sekarang
+            <ArrowRight
+              size={18}
+              className="transition-transform group-hover:translate-x-1"
+            />
+          </Link>
+        </div>
       </main>
     );
   }
-
-  // =========================
-  // 🚀 BOOKING
-  // =========================
-
-  // =========================
-  // 🎯 UI
-  // =========================
 
   return (
     <main className="min-h-screen bg-[#f5f7fb] pt-20">
@@ -473,8 +559,10 @@ export default function BookingPage() {
 
                   <div className="space-y-3">
                     <input
+                      disabled={isAuthenticated}
                       placeholder="Email Address"
-                      className="w-full rounded-lg border px-3 py-2"
+                      className="w-full rounded-lg border px-3 py-2 disabled:bg-slate-100
+    disabled:text-slate-500"
                       value={contact.email}
                       onChange={(e) =>
                         setContact((p) => ({ ...p, email: e.target.value }))
@@ -483,8 +571,10 @@ export default function BookingPage() {
 
                     <div className="grid grid-cols-2 gap-3">
                       <input
+                        disabled={isAuthenticated}
                         placeholder="First Name"
-                        className="rounded-lg border px-3 py-2"
+                        className="rounded-lg border px-3 py-2 disabled:bg-slate-100
+    disabled:text-slate-500"
                         value={contact.firstName}
                         onChange={(e) =>
                           setContact((p) => ({
@@ -495,8 +585,10 @@ export default function BookingPage() {
                       />
 
                       <input
+                        disabled={isAuthenticated}
                         placeholder="Last Name"
-                        className="rounded-lg border px-3 py-2"
+                        className="rounded-lg border px-3 py-2 disabled:bg-slate-100
+    disabled:text-slate-500"
                         value={contact.lastName}
                         onChange={(e) =>
                           setContact((p) => ({
@@ -508,8 +600,10 @@ export default function BookingPage() {
                     </div>
 
                     <input
+                      disabled={isAuthenticated}
                       placeholder="Phone Number"
-                      className="w-full rounded-lg border px-3 py-2"
+                      className="w-full rounded-lg border px-3 py-2 disabled:bg-slate-100
+    disabled:text-slate-500"
                       value={contact.phone}
                       onChange={(e) =>
                         setContact((p) => ({ ...p, phone: e.target.value }))
@@ -526,7 +620,8 @@ export default function BookingPage() {
                     <input
                       disabled={isSelfBooking}
                       placeholder="Email Address"
-                      className="w-full rounded-lg border px-3 py-2 disabled:bg-slate-100"
+                      className="w-full rounded-lg border px-3 py-2 disabled:bg-slate-100
+    disabled:text-slate-500"
                       value={guestDetail.email}
                       onChange={(e) =>
                         setGuestDetail((p) => ({
@@ -540,7 +635,8 @@ export default function BookingPage() {
                       <input
                         disabled={isSelfBooking}
                         placeholder="First Name"
-                        className="rounded-lg border px-3 py-2 disabled:bg-slate-100"
+                        className="rounded-lg border px-3 py-2 disabled:bg-slate-100
+    disabled:text-slate-500"
                         value={guestDetail.firstName}
                         onChange={(e) =>
                           setGuestDetail((p) => ({
@@ -553,7 +649,8 @@ export default function BookingPage() {
                       <input
                         disabled={isSelfBooking}
                         placeholder="Last Name"
-                        className="rounded-lg border px-3 py-2 disabled:bg-slate-100"
+                        className="rounded-lg border px-3 py-2 disabled:bg-slate-100
+    disabled:text-slate-500"
                         value={guestDetail.lastName}
                         onChange={(e) =>
                           setGuestDetail((p) => ({
@@ -567,7 +664,8 @@ export default function BookingPage() {
                     <input
                       disabled={isSelfBooking}
                       placeholder="Phone Number"
-                      className="w-full rounded-lg border px-3 py-2 disabled:bg-slate-100"
+                      className="w-full rounded-lg border px-3 py-2 disabled:bg-slate-100
+    disabled:text-slate-500"
                       value={guestDetail.phone}
                       onChange={(e) =>
                         setGuestDetail((p) => ({
@@ -724,10 +822,7 @@ export default function BookingPage() {
                 {/* IMAGE */}
                 <div className="relative h-40 w-full overflow-hidden rounded-xl">
                   <Image
-                    src={
-                      item.image ||
-                      "https://images.unsplash.com/photo-1566665797739-1674de7a421a?w=1200&q=80"
-                    }
+                    src={getImageUrl(item.image)}
                     alt={item.roomTypeName}
                     fill
                     priority={index === 0}
@@ -767,12 +862,14 @@ export default function BookingPage() {
                   <div className="flex items-center justify-between text-xs">
                     <div className="flex items-center gap-2 text-slate-600">
                       <Calendar size={14} />
-                      <span>{item.checkIn}</span>
+                      <span>{formatBookingDate(item.checkIn)}</span>
                     </div>
 
                     <div className="h-[1px] flex-1 mx-2 bg-slate-200" />
 
-                    <div className="text-slate-600">{item.checkOut}</div>
+                    <div className="text-slate-600">
+                      {formatBookingDate(item.checkOut)}
+                    </div>
                   </div>
 
                   {/* STATS */}

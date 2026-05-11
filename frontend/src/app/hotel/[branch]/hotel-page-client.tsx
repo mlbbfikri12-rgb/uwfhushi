@@ -16,6 +16,9 @@ import { PricingRatePlan, PricingRoom } from "@/types/admin-rateplan";
 import { BENEFIT_MAP } from "@/utils/BenefitsMap";
 import { useRouter } from "next/navigation";
 import { clearDraft, getDraft, saveDraft } from "@/utils/BookingDraftUtils";
+import { getImageUrl } from "@/utils/ImageCombineUrl";
+import { queryKeys } from "@/lib/query-keys";
+import { appLogger } from "@/lib/logger";
 
 type Props = {
   slug: string;
@@ -29,12 +32,6 @@ function formatDistance(distanceKm: number) {
   if (!Number.isFinite(distanceKm)) return "-";
   if (distanceKm < 1) return `${Math.round(distanceKm * 1000)} m`;
   return `${distanceKm.toFixed(1)} km`;
-}
-
-function toImageUrl(url: string) {
-  return /^https?:\/\//i.test(url)
-    ? url
-    : "https://images.unsplash.com/photo-1566665797739-1674de7a421a?w=1200&q=80";
 }
 
 export default function HotelPageClient({
@@ -56,9 +53,10 @@ export default function HotelPageClient({
   const [selected, setSelected] = useState<SelectedItem[]>([]);
 
   const pricingQuery = useQuery<PricingRoom[]>({
-    queryKey: ["pricing", slug, checkIn, checkOut],
+    queryKey: queryKeys.hotel.pricing(slug, checkIn, checkOut),
     queryFn: () => getHotelPricing({ slug, checkIn, checkOut }),
     enabled: Boolean(slug && checkIn && checkOut),
+    staleTime: 1000 * 60 * 5,
   });
 
   const images = useMemo(() => hotel.images ?? [], [hotel.images]);
@@ -115,8 +113,6 @@ export default function HotelPageClient({
       }),
     );
   }, [pricingQuery.data]);
-
-  console.log(roomTypes);
 
   // =========================
   // HELPERS
@@ -181,8 +177,17 @@ export default function HotelPageClient({
     const items = selected.map((item) => {
       const room = roomTypes.find((r) => r.id === item.roomTypeId);
       const rp = room?.ratePlans.find((r) => r.id === item.ratePlanId);
+      const key = [
+        hotel.branchCode,
+        slug,
+        checkIn,
+        checkOut,
+        item.roomTypeId,
+        item.ratePlanId,
+      ].join("/");
 
       return {
+        key,
         roomTypeId: item.roomTypeId,
         ratePlanId: item.ratePlanId,
         roomTypeName: room?.name,
@@ -198,12 +203,14 @@ export default function HotelPageClient({
     });
 
     saveDraft({
+      version: 1,
       slug,
+      branchCode: hotel.branchCode,
       checkIn,
       checkOut,
       items,
     });
-  }, [selected, roomTypes, slug, checkIn, checkOut]);
+  }, [selected, roomTypes, slug, hotel.branchCode, checkIn, checkOut]);
 
   // =========================
   // ACTIONS
@@ -267,10 +274,18 @@ export default function HotelPageClient({
 
     if (firstRoomType) {
       await queryClient.prefetchQuery({
-        queryKey: ["room-detail", slug, firstRoomType],
+        queryKey: queryKeys.hotel.roomDetail(slug, firstRoomType),
         queryFn: () => getRoomDetail(slug, firstRoomType),
+        staleTime: 1000 * 60 * 5,
       });
     }
+
+    appLogger.info("Continue booking from hotel detail", {
+      slug,
+      branchCode: hotel.branchCode,
+      selectedItems: selected.length,
+      totalRoomsSelected,
+    });
 
     router.push("/booking");
   };
@@ -367,9 +382,11 @@ export default function HotelPageClient({
                 <div className="mb-8 grid h-[380px] grid-cols-4 grid-rows-2 gap-2">
                   <div className="relative col-span-2 row-span-2 overflow-hidden rounded-l-xl">
                     <Image
-                      src={toImageUrl(imageList[0])}
+                      src={getImageUrl(imageList[0])}
                       alt={hotel.name}
                       fill
+                      priority
+                      sizes="(max-width: 768px) 100vw, 50vw"
                       className="object-cover"
                     />
                   </div>
@@ -378,9 +395,10 @@ export default function HotelPageClient({
                     .map((image: string, index: Key | null | undefined) => (
                       <div key={index} className="relative overflow-hidden">
                         <Image
-                          src={toImageUrl(image)}
+                          src={getImageUrl(image)}
                           alt={hotel.name}
                           fill
+                          sizes="(max-width: 768px) 50vw, 25vw"
                           className="object-cover"
                         />
                       </div>
@@ -488,9 +506,10 @@ export default function HotelPageClient({
                             {/* IMAGE */}
                             <div className="relative h-48 w-full">
                               <Image
-                                src={toImageUrl(roomType.image)}
+                                src={getImageUrl(roomType.image)}
                                 alt={roomType.name}
                                 fill
+                                sizes="(max-width: 768px) 100vw, 33vw"
                                 className="object-cover"
                               />
 

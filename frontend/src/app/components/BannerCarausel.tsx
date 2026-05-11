@@ -7,12 +7,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect } from "react";
 
 import type { PublicBanner } from "@/types/home";
-
-function toImageUrl(url: string) {
-  return /^https?:\/\//i.test(url)
-    ? url
-    : "https://images.unsplash.com/photo-1566073771259-6a8506099945?w=1200&q=80";
-}
+import { getImageUrl } from "@/utils/ImageCombineUrl";
 
 type Props = {
   banners: PublicBanner[];
@@ -63,7 +58,7 @@ export default function BannerCarousel({
       {activeBanner ? (
         <Image
           key={activeBanner.id}
-          src={toImageUrl(activeBanner.imageUrl)}
+          src={getImageUrl(activeBanner.imageUrl)}
           alt={activeBanner.title}
           fill
           priority
@@ -107,7 +102,7 @@ export default function BannerCarousel({
                 }`}
               >
                 <Image
-                  src={toImageUrl(banner.imageUrl)}
+                  src={getImageUrl(banner.imageUrl)}
                   alt={banner.title}
                   fill
                   priority={idx === 0}
